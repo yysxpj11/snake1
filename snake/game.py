@@ -212,8 +212,13 @@ class Game:
     # -- 核心更新 -----------------------------------------------------------
 
     def current_move_interval(self) -> float:
-        """计算当前实际移动间隔：难度、加速、等级共同影响。"""
-        interval = self.config.move_interval * self.config.speed_factor()
+        """计算当前实际移动间隔。
+
+        速度参数完全来自设置层：难度决定基础间隔（秒/格），
+        关卡提升会让蛇略微加速，加速道具再按倍率缩短。
+        """
+        # 从难度设置读取基础移动间隔，不再使用硬编码倍率
+        interval = self.config.move_interval_for_difficulty
         interval = max(0.05, interval - (self.level - 1) * 0.005)
         if self.speed_timer is not None and not self.speed_timer.finished:
             interval *= self.SPEED_BOOST_DIVISOR

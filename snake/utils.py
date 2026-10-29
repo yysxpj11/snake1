@@ -22,6 +22,7 @@ import random
 import sys
 import time
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Dict, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
@@ -74,8 +75,86 @@ OPPOSITE_DIRECTIONS: Dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
-# 配置数据类
+# 难度枚举与配置数据类
 # ---------------------------------------------------------------------------
+
+# 各难度档位的参数表（集中存放，便于统一调整；
+# 注意不能写在 Enum 类体内，否则会被当作枚举成员）
+DIFFICULTY_MOVE_INTERVALS: Dict[str, float] = {
+    "easy": 0.16,    # 慢速：每格 0.16 秒
+    "normal": 0.12,  # 中速
+    "hard": 0.085,   # 快速
+}
+
+DIFFICULTY_SCORE_MULTIPLIERS: Dict[str, float] = {
+    "easy": 0.8,
+    "normal": 1.0,
+    "hard": 1.5,
+}
+
+DIFFICULTY_LABELS: Dict[str, str] = {
+    "easy": "简单",
+    "normal": "普通",
+    "hard": "困难",
+}
+
+
+class Difficulty(Enum):
+    """难度档位枚举。
+
+    每个档位自带速度与得分参数，游戏逻辑只读枚举属性，
+    不再硬编码任何数值：
+    - EASY:   慢速（0.16 秒/格），得分倍率 0.8
+    - NORMAL: 中速（0.12 秒/格），得分倍率 1.0
+    - HARD:   快速（0.085 秒/格），得分倍率 1.5
+    """
+
+    EASY = "easy"
+    NORMAL = "normal"
+    HARD = "hard"
+
+    @property
+    def label(self) -> str:
+        """返回中文显示名（简单 / 普通 / 困难）。"""
+        return DIFFICULTY_LABELS[self.value]
+
+    @property
+    def move_interval(self) -> float:
+        """蛇每移动一格所需的秒数，数值越小蛇越快。"""
+        return DIFFICULTY_MOVE_INTERVALS[self.value]
+
+    @property
+    def score_multiplier(self) -> float:
+        """该难度下的得分倍率。"""
+        return DIFFICULTY_SCORE_MULTIPLIERS[self.value]
+
+    @property
+    def speed_factor(self) -> float:
+        """相对普通档的速度倍率（1.0 为基准，小于 1 表示更快）。"""
+        return self.move_interval / DIFFICULTY_MOVE_INTERVALS[Difficulty.NORMAL.value]
+
+    def next(self) -> "Difficulty":
+        """返回下一档难度（困难之后回到简单）。"""
+        order = Difficulty.levels()
+        return order[(order.index(self) + 1) % len(order)]
+
+    def previous(self) -> "Difficulty":
+        """返回上一档难度（简单之前回到困难）。"""
+        order = Difficulty.levels()
+        return order[(order.index(self) - 1) % len(order)]
+
+    @classmethod
+    def levels(cls) -> List["Difficulty"]:
+        """按由慢到快返回全部难度档位。"""
+        return [cls.EASY, cls.NORMAL, cls.HARD]
+
+    @classmethod
+    def from_name(cls, name: str) -> "Difficulty":
+        """根据名称（不区分大小写）构造难度，无效名称回退到普通。"""
+        try:
+            return cls(str(name).strip().lower())
+        except (ValueError, AttributeError):
+            return cls.NORMAL
 
 
 @dataclass
@@ -87,11 +166,11 @@ class Config:
         window_height: 窗口高度（像素）。
         cell_size: 单个网格单元的边长（像素）。
         fps: 目标帧率。
-        move_interval: 蛇移动一格的间隔秒数。
+        move_interval: 基础移动间隔秒数（难度会覆盖此值）。
         score_per_food: 普通食物得分。
         sound_enabled: 是否开启音效。
         fullscreen: 是否全屏运行。
-        difficulty: 难度等级（easy / normal / hard）。
+        difficulty: 难度档位枚举（easy / normal / hard）。
         max_score_history: 高分榜最多保存条数。
     """
 
@@ -103,7 +182,7 @@ class Config:
     score_per_food: int = SCORE_PER_FOOD
     sound_enabled: bool = True
     fullscreen: bool = False
-    difficulty: str = "normal"
+    difficulty: Difficulty = Difficulty.NORMAL
     max_score_history: int = 10
 
     @property
@@ -117,14 +196,17 @@ class Config:
         return self.window_height // self.cell_size
 
     def difficulty_multiplier(self) -> float:
-        """根据难度返回得分倍率。"""
-        mapping = {"easy": 0.8, "normal": 1.0, "hard": 1.5}
-        return mapping.get(self.difficulty, 1.0)
+        """返回当前难度对应的得分倍率。"""
+        return self.difficulty.score_multiplier
 
     def speed_factor(self) -> float:
-        """根据难度返回速度倍率（越小越快）。"""
-        mapping = {"easy": 1.3, "normal": 1.0, "hard": 0.75}
-        return mapping.get(self.difficulty, 1.0)
+        """返回当前难度相对普通档的速度倍率（小于 1 表示更快）。"""
+        return self.difficulty.speed_factor
+
+    @property
+    def move_interval_for_difficulty(self) -> float:
+        """返回当前难度对应的移动间隔（秒/格），供游戏逻辑直接读取。"""
+        return self.difficulty.move_interval
 
     def clamp_to_window(self) -> None:
         """保证窗口尺寸是单元尺寸的整数倍，避免网格溢出。"""

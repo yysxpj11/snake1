@@ -21,7 +21,7 @@ import pygame
 from .food import FoodType
 from .game import Game, GameState
 from .snake import Direction, WallMode
-from .utils import Config, HighScoreStore, setup_logging
+from .utils import Config, Difficulty, HighScoreStore, setup_logging
 from .ui import GameRenderer, Menu, MenuRenderer, Screen
 
 
@@ -47,9 +47,8 @@ KEY_MENU_MAP = {
     pygame.K_SPACE: "confirm",
 }
 
-# 菜单中难度项的下标与中文标签
+# 菜单中难度项的下标
 MENU_DIFFICULTY_INDEX = 1
-DIFFICULTY_LABELS = {"easy": "简单", "normal": "普通", "hard": "困难"}
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -68,13 +67,13 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
 
 
 def build_config(args: argparse.Namespace) -> Config:
-    """把命令行参数转换为 Config 对象。"""
+    """把命令行参数转换为 Config 对象（难度字符串转为 Difficulty 枚举）。"""
     config = Config(
         window_width=args.width,
         window_height=args.height,
         cell_size=args.cell,
         fps=args.fps,
-        difficulty=args.difficulty,
+        difficulty=Difficulty.from_name(args.difficulty),
         sound_enabled=not args.no_sound,
         fullscreen=args.fullscreen,
     )
@@ -138,13 +137,13 @@ class Application:
         self.game.new_game()
 
     def _cycle_difficulty(self, step: int) -> None:
-        """循环切换难度 easy -> normal -> hard，并同步菜单标签。"""
-        order = ["easy", "normal", "hard"]
-        index = order.index(self.config.difficulty)
-        self.config.difficulty = order[(index + step) % len(order)]
+        """循环切换难度（简单 → 普通 → 困难），并同步得分倍率与菜单标签。"""
+        current = self.config.difficulty
+        self.config.difficulty = current.next() if step > 0 else current.previous()
         self.game.score_manager.multiplier = self.config.difficulty_multiplier()
-        label = DIFFICULTY_LABELS.get(self.config.difficulty, "普通")
-        self.menu_logic.set_item_text(MENU_DIFFICULTY_INDEX, f"难度: {label}")
+        self.menu_logic.set_item_text(
+            MENU_DIFFICULTY_INDEX, f"难度: {self.config.difficulty.label}"
+        )
 
     def _handle_playing_events(self, events: List[pygame.event.Event]) -> None:
         """处理游戏进行中/暂停的事件。"""

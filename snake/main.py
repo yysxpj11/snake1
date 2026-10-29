@@ -124,9 +124,18 @@ class Application:
     # -- 事件 ---------------------------------------------------------------
 
     def _handle_global_keys(self, event: pygame.event.Event) -> None:
-        """处理全局按键：ESC 退出。"""
-        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+        """处理全局按键：ESC 在菜单中退出程序，在游戏/结束画面中返回开始菜单。"""
+        if event.type != pygame.KEYDOWN or event.key != pygame.K_ESCAPE:
+            return
+        if self.game.state == GameState.MENU:
             self.running = False
+        else:
+            self._return_to_menu()
+
+    def _return_to_menu(self) -> None:
+        """返回开始菜单，并把菜单选中项复位到第一项。"""
+        self.game.back_to_menu()
+        self.menu_logic.selected_index = 0
 
     def _handle_menu_events(self, events: List[pygame.event.Event]) -> None:
         """处理菜单状态事件：↑↓ 选择、←→ 切难度、回车确认、鼠标点击。"""

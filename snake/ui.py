@@ -292,13 +292,15 @@ class GameRenderer:
     # -- 覆盖层 -------------------------------------------------------------
 
     def draw_pause_overlay(self) -> None:
-        """绘制暂停遮罩与提示文字。"""
+        """绘制暂停遮罩：半透明黑底 + "已暂停，按 P 继续" 居中提示。"""
         self._dim_overlay()
-        size = self.screen.config.window_width, self.screen.config.window_height
-        cx, cy = size[0] // 2, size[1] // 2
-        self.screen.draw_text("已暂停", (cx, cy - 30), 48, Palette.TEXT_PRIMARY, center=True)
+        w, h = self.screen.config.window_width, self.screen.config.window_height
+        cx, cy = w // 2, h // 2
         self.screen.draw_text(
-            "按 P 或 空格 继续", (cx, cy + 30), 20, Palette.TEXT_DIM, center=True
+            "已暂停，按 P 继续", (cx, cy - 10), 40, Palette.TEXT_PRIMARY, center=True
+        )
+        self.screen.draw_text(
+            "按 ESC 返回开始菜单", (cx, cy + 44), 20, Palette.TEXT_DIM, center=True
         )
 
     def _dim_overlay(self, alpha: int = 160) -> None:

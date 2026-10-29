@@ -320,13 +320,122 @@ class GameRenderer:
         self.screen.surface.blit(border, (0, 0))
 
 
+class Menu:
+    """开始菜单的逻辑状态：菜单项、选中索引与确认动作。
+
+    本类只负责菜单的状态与键盘交互逻辑，不直接绘制，
+    绘制由 MenuRenderer 完成；这样菜单逻辑可以脱离窗口做单元测试。
+
+    Attributes:
+        items: 菜单项列表，形如 [(显示文本, 动作名), ...]。
+        selected_index: 当前选中的菜单项下标。
+        on_select: 确认选中项时的回调，参数为动作名字符串。
+    """
+
+    def __init__(
+        self,
+        items: Optional[List[Tuple[str, str]]] = None,
+        on_select=None,
+    ) -> None:
+        """初始化菜单项与选中状态，items 默认为 开始/难度/退出。"""
+        if items is None:
+            items = [
+                ("开始游戏", "start"),
+                ("难度: 普通", "difficulty"),
+                ("退出", "quit"),
+            ]
+        self.items: List[Tuple[str, str]] = list(items)
+        self.selected_index = 0
+        self.on_select = on_select
+
+    @property
+    def selected_text(self) -> str:
+        """当前选中项的显示文本。"""
+        return self.items[self.selected_index][0]
+
+    @property
+    def selected_action(self) -> str:
+        """当前选中项的动作名。"""
+        return self.items[self.selected_index][1]
+
+    def move_up(self) -> None:
+        """向上移动选中项，到顶后循环回最后一项。"""
+        self.selected_index = (self.selected_index - 1) % len(self.items)
+
+    def move_down(self) -> None:
+        """向下移动选中项，到底后循环回第一项。"""
+        self.selected_index = (self.selected_index + 1) % len(self.items)
+
+    def set_item_text(self, index: int, text: str) -> None:
+        """更新指定菜单项的显示文本（如难度切换后刷新标签）。"""
+        if 0 <= index < len(self.items):
+            label, action = self.items[index]
+            self.items[index] = (text, action)
+
+    def confirm(self) -> Optional[str]:
+        """确认当前选中项，触发回调并返回动作名（无回调时仅返回动作名）。"""
+        action = self.selected_action
+        if self.on_select is not None:
+            self.on_select(action)
+        return action
+
+    def handle_key(self, key: str) -> Optional[str]:
+        """处理一个抽象按键，key 可为 up / down / confirm。
+
+        返回 confirm 产生的动作名；纯移动操作返回 None。
+        """
+        if key == "up":
+            self.move_up()
+            return None
+        if key == "down":
+            self.move_down()
+            return None
+        if key == "confirm":
+            return self.confirm()
+        return None
+
+    def handle_click_at(self, pos: Tuple[int, int], item_rects: Sequence[pygame.Rect]) -> Optional[str]:
+        """处理鼠标点击：点中某个菜单项则选中并确认，返回动作名。"""
+        for index, rect in enumerate(item_rects):
+            if rect.collidepoint(pos):
+                self.selected_index = index
+                return self.confirm()
+        return None
+
+
+def build_vertical_gradient(
+    width: int,
+    height: int,
+    top_color: Tuple[int, int, int] = (30, 30, 46),
+    bottom_color: Tuple[int, int, int] = (8, 8, 14),
+) -> pygame.Surface:
+    """生成一张深色纵向渐变背景 Surface（顶亮底暗）。"""
+    surface = pygame.Surface((width, height))
+    span = max(1, height - 1)
+    for y in range(height):
+        t = y / span
+        color = (
+            int(top_color[0] + (bottom_color[0] - top_color[0]) * t),
+            int(top_color[1] + (bottom_color[1] - top_color[1]) * t),
+            int(top_color[2] + (bottom_color[2] - top_color[2]) * t),
+        )
+        pygame.draw.line(surface, color, (0, y), (width, y))
+    return surface
+
+
 class MenuRenderer:
     """主菜单、结束画面等静态界面的渲染与按钮管理。"""
 
+    # 菜单项在界面中的纵向排布参数
+    ITEM_WIDTH = 260
+    ITEM_HEIGHT = 52
+    ITEM_GAP = 18
+
     def __init__(self, screen: Screen) -> None:
-        """初始化并创建菜单按钮组。"""
+        """初始化并创建菜单按钮组与渐变背景缓存。"""
         self.screen = screen
         self.buttons: List[Button] = []
+        self._gradient: Optional[pygame.Surface] = None
         self._build_main_menu()
 
     def _make_button(self, text: str, index: int, on_click) -> Button:
@@ -343,21 +452,56 @@ class MenuRenderer:
         self.buttons.append(self._make_button("难度: 普通", 1, None))
         self.buttons.append(self._make_button("退出", 2, None))
 
-    def draw_main_menu(self, best_score: int) -> None:
-        """绘制主菜单界面。"""
-        self.screen.draw_background()
+    def _ensure_gradient(self) -> pygame.Surface:
+        """获取（或首次生成）菜单用的深色渐变背景。"""
+        if self._gradient is None:
+            w, h = self.screen.config.window_width, self.screen.config.window_height
+            self._gradient = build_vertical_gradient(w, h)
+        return self._gradient
+
+    def item_rects(self, menu: "Menu") -> List[pygame.Rect]:
+        """计算各菜单项的屏幕矩形，与绘制位置保持一致（供点击命中使用）。"""
         w, h = self.screen.config.window_width, self.screen.config.window_height
-        self.screen.draw_text("贪吃蛇", (w // 2, h // 3 - 40), 64, Palette.SNAKE_HEAD, center=True)
-        self.screen.draw_text(
-            f"历史最高分: {best_score}", (w // 2, h // 3 + 20), 24, Palette.TEXT_DIM, center=True
-        )
+        start_y = int(h * 0.52)
+        rects: List[pygame.Rect] = []
+        for index in range(len(menu.items)):
+            rect = pygame.Rect(0, 0, MenuRenderer.ITEM_WIDTH, MenuRenderer.ITEM_HEIGHT)
+            rect.center = (w // 2, start_y + index * (MenuRenderer.ITEM_HEIGHT + MenuRenderer.ITEM_GAP))
+            rects.append(rect)
+        return rects
+
+    def draw_main_menu(self, best_score: int, menu: "Menu") -> None:
+        """绘制开始菜单：深色渐变背景 + 居中标题 + 键盘选中高亮。"""
+        self.screen.surface.blit(self._ensure_gradient(), (0, 0))
+        w, h = self.screen.config.window_width, self.screen.config.window_height
         fonts = self.screen.fonts
-        for button in self.buttons:
-            button.update_hover(pygame.mouse.get_pos())
-            button.draw(self.screen.surface, fonts)
+
+        # 标题与最高分
+        title = fonts.render("贪吃蛇", 64, Palette.SNAKE_HEAD)
+        title_rect = title.get_rect(center=(w // 2, int(h * 0.26)))
+        self.screen.surface.blit(title, title_rect)
+        sub = fonts.render(f"历史最高分: {best_score}", 24, Palette.TEXT_DIM)
+        sub_rect = sub.get_rect(center=(w // 2, int(h * 0.26) + 58))
+        self.screen.surface.blit(sub, sub_rect)
+
+        # 菜单项：选中项高亮加边框，未选中项半透明暗色
+        rects = self.item_rects(menu)
+        for index, (label, _action) in enumerate(menu.items):
+            rect = rects[index]
+            selected = index == menu.selected_index
+            bg = Palette.BUTTON_HOVER if selected else Palette.BUTTON_BG
+            border = Palette.SNAKE_HEAD if selected else Palette.PANEL_BORDER
+            pygame.draw.rect(self.screen.surface, bg, rect, border_radius=8)
+            pygame.draw.rect(self.screen.surface, border, rect, 2, border_radius=8)
+            text_color = Palette.TEXT_PRIMARY if selected else Palette.TEXT_DIM
+            prefix = "▶ " if selected else ""
+            rendered = fonts.render(f"{prefix}{label}", 24, text_color)
+            text_rect = rendered.get_rect(center=rect.center)
+            self.screen.surface.blit(rendered, text_rect)
+
         self.screen.draw_text(
-            "方向键 / WASD 移动 · P 暂停 · ESC 退出",
-            (w // 2, h - 40),
+            "↑/↓ 选择 · 回车 确认 · ESC 退出",
+            (w // 2, h - 36),
             16,
             Palette.TEXT_DIM,
             center=True,

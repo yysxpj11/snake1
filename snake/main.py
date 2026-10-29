@@ -22,7 +22,7 @@ from .food import FoodType
 from .game import Game, GameState
 from .snake import Direction, WallMode
 from .utils import Config, HighScoreStore, setup_logging
-from .ui import GameRenderer, MenuRenderer, Screen
+from .ui import GameRenderer, Menu, MenuRenderer, Screen
 
 
 # 方向键映射表：pygame 键码 -> Direction
@@ -72,12 +72,14 @@ class Application:
     """应用层：组合 Screen / MenuRenderer / Game 并驱动主循环。"""
 
     def __init__(self, config: Config, seed: Optional[int] = None) -> None:
-        """初始化窗口、菜单与游戏对象，并预创建一局数据。"""
+        """初始化窗口、菜单与游戏对象；启动后先显示开始菜单。"""
         self.config = config
         self.screen = Screen(config)
+        self.menu_logic = Menu()
         self.menu = MenuRenderer(self.screen)
         self.store = HighScoreStore()
         self.game = Game(config=config, seed=seed, store=self.store)
+        # 预创建一局数据后立即回到菜单状态，保证启动第一屏是开始菜单
         self.game.new_game(wall_mode=WallMode.WRAP if config.fullscreen else WallMode.SOLID)
         self.game.back_to_menu()
         self.hud_message = ""
@@ -167,7 +169,7 @@ class Application:
         """按状态渲染当前画面。"""
         state = self.game.state
         if state == GameState.MENU:
-            self.menu.draw_main_menu(self.game.best_score)
+            self.menu.draw_main_menu(self.game.best_score, self.menu_logic)
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._render_playfield()
             if state == GameState.PAUSED:

@@ -43,12 +43,13 @@ KEY_MENU_MAP = {
     pygame.K_w: "up",
     pygame.K_DOWN: "down",
     pygame.K_s: "down",
+    pygame.K_LEFT: "left",
+    pygame.K_a: "left",
+    pygame.K_RIGHT: "right",
+    pygame.K_d: "right",
     pygame.K_RETURN: "confirm",
     pygame.K_SPACE: "confirm",
 }
-
-# 菜单中难度项的下标
-MENU_DIFFICULTY_INDEX = 1
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -90,8 +91,12 @@ class Application:
         self.screen = Screen(config)
         self.store = HighScoreStore()
         self.game = Game(config=config, seed=seed, store=self.store)
-        # 菜单逻辑：选中"开始游戏"时进入游戏，"退出"时结束程序
-        self.menu_logic = Menu(on_select=self._on_menu_select)
+        # 菜单逻辑：确认开始游戏、左右键切换难度、退出程序
+        self.menu_logic = Menu(
+            on_select=self._on_menu_select,
+            difficulty=self.config.difficulty,
+            on_difficulty_change=self._on_difficulty_change,
+        )
         self.menu = MenuRenderer(self.screen)
         # 预创建一局数据后立即回到菜单状态，保证启动第一屏是开始菜单
         self.game.new_game(wall_mode=WallMode.WRAP if config.fullscreen else WallMode.SOLID)
@@ -101,13 +106,20 @@ class Application:
         self.running = True
 
     def _on_menu_select(self, action: str) -> None:
-        """菜单确认回调：根据动作名执行开始游戏 / 切难度 / 退出。"""
+        """菜单确认回调：根据动作名执行开始游戏 / 退出。
+
+        难度项由 Menu.cycle_difficulty 处理并通过 _on_difficulty_change 同步，
+        这里无需重复切换。
+        """
         if action == "start":
             self._start_game()
-        elif action == "difficulty":
-            self._cycle_difficulty(1)
         elif action == "quit":
             self.running = False
+
+    def _on_difficulty_change(self, difficulty: Difficulty) -> None:
+        """难度切换回调：写入设置并同步得分倍率（速度在每帧读取设置）。"""
+        self.config.difficulty = difficulty
+        self.game.score_manager.multiplier = difficulty.score_multiplier
 
     # -- 事件 ---------------------------------------------------------------
 
@@ -117,16 +129,12 @@ class Application:
             self.running = False
 
     def _handle_menu_events(self, events: List[pygame.event.Event]) -> None:
-        """处理菜单状态事件：方向键上下选择、回车确认、鼠标点击。"""
+        """处理菜单状态事件：↑↓ 选择、←→ 切难度、回车确认、鼠标点击。"""
         for event in events:
             if event.type == pygame.KEYDOWN:
                 menu_key = KEY_MENU_MAP.get(event.key)
                 if menu_key is not None:
                     self.menu_logic.handle_key(menu_key)
-                elif event.key == pygame.K_LEFT:
-                    self._cycle_difficulty(-1)
-                elif event.key == pygame.K_RIGHT:
-                    self._cycle_difficulty(1)
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 rects = self.menu.item_rects(self.menu_logic)
                 self.menu_logic.handle_click_at(event.pos, rects)
@@ -135,15 +143,6 @@ class Application:
         """开始新一局。"""
         self.move_accumulator = 0.0
         self.game.new_game()
-
-    def _cycle_difficulty(self, step: int) -> None:
-        """循环切换难度（简单 → 普通 → 困难），并同步得分倍率与菜单标签。"""
-        current = self.config.difficulty
-        self.config.difficulty = current.next() if step > 0 else current.previous()
-        self.game.score_manager.multiplier = self.config.difficulty_multiplier()
-        self.menu_logic.set_item_text(
-            MENU_DIFFICULTY_INDEX, f"难度: {self.config.difficulty.label}"
-        )
 
     def _handle_playing_events(self, events: List[pygame.event.Event]) -> None:
         """处理游戏进行中/暂停的事件。"""

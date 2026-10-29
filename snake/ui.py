@@ -22,7 +22,7 @@ import pygame
 
 from .food import Food, FoodType
 from .snake import Snake, WallMode
-from .utils import Config, Palette, format_score, format_time
+from .utils import Config, Difficulty, Palette, format_score, format_time
 
 
 class FontBank:
@@ -336,17 +336,36 @@ class Menu:
         self,
         items: Optional[List[Tuple[str, str]]] = None,
         on_select=None,
+        difficulty: Optional[Difficulty] = None,
+        on_difficulty_change=None,
     ) -> None:
-        """初始化菜单项与选中状态，items 默认为 开始/难度/退出。"""
+        """初始化菜单项、选中状态与难度档位。
+
+        Args:
+            items: 菜单项列表 [(文本, 动作名)]，默认 开始游戏/选择难度/退出。
+            on_select: 确认菜单项时的回调，参数为动作名。
+            difficulty: 初始难度档位，默认 NORMAL。
+            on_difficulty_change: 难度切换时的回调，参数为新的 Difficulty。
+        """
+        self.difficulty: Difficulty = difficulty or Difficulty.NORMAL
+        self.on_difficulty_change = on_difficulty_change
         if items is None:
             items = [
                 ("开始游戏", "start"),
-                ("难度: 普通", "difficulty"),
+                (f"选择难度: {self.difficulty.label}", "difficulty"),
                 ("退出", "quit"),
             ]
         self.items: List[Tuple[str, str]] = list(items)
         self.selected_index = 0
         self.on_select = on_select
+
+    @property
+    def difficulty_index(self) -> int:
+        """返回难度项在菜单中的下标，找不到返回 -1。"""
+        for index, (_text, action) in enumerate(self.items):
+            if action == "difficulty":
+                return index
+        return -1
 
     @property
     def selected_text(self) -> str:
@@ -372,23 +391,45 @@ class Menu:
             label, action = self.items[index]
             self.items[index] = (text, action)
 
+    def set_difficulty(self, difficulty: Difficulty, notify: bool = True) -> None:
+        """设置当前难度并刷新菜单标签，notify=True 时触发切换回调。"""
+        self.difficulty = difficulty
+        index = self.difficulty_index
+        if index >= 0:
+            self.set_item_text(index, f"选择难度: {difficulty.label}")
+        if notify and self.on_difficulty_change is not None:
+            self.on_difficulty_change(difficulty)
+
+    def cycle_difficulty(self, step: int) -> Difficulty:
+        """按 step 方向在三档难度间循环切换（正数下一档，负数上一档）。"""
+        new_difficulty = self.difficulty.next() if step > 0 else self.difficulty.previous()
+        self.set_difficulty(new_difficulty)
+        return new_difficulty
+
     def confirm(self) -> Optional[str]:
         """确认当前选中项，触发回调并返回动作名（无回调时仅返回动作名）。"""
         action = self.selected_action
+        # 难度项上的确认等价于切到下一档
+        if action == "difficulty":
+            self.cycle_difficulty(1)
         if self.on_select is not None:
             self.on_select(action)
         return action
 
     def handle_key(self, key: str) -> Optional[str]:
-        """处理一个抽象按键，key 可为 up / down / confirm。
+        """处理一个抽象按键，key 可为 up / down / left / right / confirm。
 
-        返回 confirm 产生的动作名；纯移动操作返回 None。
+        左右键仅在选中"选择难度"时生效，用于切换三档难度；
+        返回 confirm 产生的动作名，其余操作返回 None。
         """
         if key == "up":
             self.move_up()
             return None
         if key == "down":
             self.move_down()
+            return None
+        if key in ("left", "right") and self.selected_action == "difficulty":
+            self.cycle_difficulty(-1 if key == "left" else 1)
             return None
         if key == "confirm":
             return self.confirm()
@@ -486,7 +527,7 @@ class MenuRenderer:
 
         # 菜单项：选中项高亮加边框，未选中项半透明暗色
         rects = self.item_rects(menu)
-        for index, (label, _action) in enumerate(menu.items):
+        for index, (label, action) in enumerate(menu.items):
             rect = rects[index]
             selected = index == menu.selected_index
             bg = Palette.BUTTON_HOVER if selected else Palette.BUTTON_BG
@@ -498,14 +539,45 @@ class MenuRenderer:
             rendered = fonts.render(f"{prefix}{label}", 24, text_color)
             text_rect = rendered.get_rect(center=rect.center)
             self.screen.surface.blit(rendered, text_rect)
+            # 难度项右侧绘制三档档位条，高亮当前档位
+            if action == "difficulty":
+                self._draw_difficulty_chips(rect, menu, selected)
 
         self.screen.draw_text(
-            "↑/↓ 选择 · 回车 确认 · ESC 退出",
+            "↑/↓ 选择 · ←/→ 切换难度 · 回车 确认 · ESC 退出",
             (w // 2, h - 36),
             16,
             Palette.TEXT_DIM,
             center=True,
         )
+
+    def _draw_difficulty_chips(self, item_rect: pygame.Rect, menu: "Menu", active: bool) -> None:
+        """在难度菜单项右侧绘制 简单/普通/困难 三个档位标签，高亮当前档位。
+
+        active 表示难度项当前是否被选中，选中时档位条整体更亮以突出可操作。
+        """
+        fonts = self.screen.fonts
+        levels = Difficulty.levels()
+        chip_w, chip_h, gap = 56, 28, 8
+        total_w = len(levels) * chip_w + (len(levels) - 1) * gap
+        x = item_rect.right + 16
+        y = item_rect.centery - chip_h // 2
+        # 右侧空间不足时改为贴右边缘排列，避免超出窗口
+        max_x = self.screen.config.window_width - total_w - 10
+        x = min(x, max_x)
+        for index, level in enumerate(levels):
+            chip = pygame.Rect(x + index * (chip_w + gap), y, chip_w, chip_h)
+            is_current = level == menu.difficulty
+            if is_current:
+                bg_color = Palette.SNAKE_HEAD
+                text_color = Palette.BACKGROUND
+            else:
+                bg_color = Palette.BUTTON_BG if active else Palette.PANEL_BG
+                text_color = Palette.TEXT_DIM if active else Palette.PANEL_BORDER
+            pygame.draw.rect(self.screen.surface, bg_color, chip, border_radius=6)
+            pygame.draw.rect(self.screen.surface, Palette.PANEL_BORDER, chip, 1, border_radius=6)
+            label = fonts.render(level.label, 14, text_color)
+            self.screen.surface.blit(label, label.get_rect(center=chip.center))
 
     def draw_game_over(
         self, score: int, best: int, reason: str, is_record: bool

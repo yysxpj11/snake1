@@ -145,13 +145,14 @@ class Application:
         self.game.new_game()
 
     def _handle_playing_events(self, events: List[pygame.event.Event]) -> None:
-        """处理游戏进行中/暂停的事件。"""
+        """处理游戏进行中/暂停的事件：方向键移动、P 暂停/继续、M 回菜单。"""
         for event in events:
             if event.type == pygame.KEYDOWN:
                 direction = KEY_DIRECTION_MAP.get(event.key)
                 if direction is not None:
                     self.game.handle_direction(direction)
-                elif event.key in (pygame.K_p, pygame.K_SPACE):
+                elif event.key == pygame.K_p:
+                    # P 键切换暂停 / 继续（暂停期间蛇与食物都不更新）
                     self.game.toggle_pause()
                 elif event.key == pygame.K_m:
                     self.game.back_to_menu()

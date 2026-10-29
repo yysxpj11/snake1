@@ -170,22 +170,38 @@ class Game:
         self.speed_timer = None
         self.state = GameState.PLAYING
 
-    def pause(self) -> None:
-        """进入暂停状态（仅进行中可暂停）。"""
+    def pause(self) -> bool:
+        """进入暂停状态（仅进行中可暂停），返回是否成功暂停。"""
         if self.state == GameState.PLAYING:
             self.state = GameState.PAUSED
+            return True
+        return False
 
-    def resume(self) -> None:
-        """从暂停恢复。"""
+    def resume(self) -> bool:
+        """从暂停恢复到进行中，返回是否成功恢复。"""
         if self.state == GameState.PAUSED:
             self.state = GameState.PLAYING
+            return True
+        return False
 
-    def toggle_pause(self) -> None:
-        """切换暂停/继续。"""
+    def toggle_pause(self) -> bool:
+        """切换暂停/继续。
+
+        Returns:
+            切换后是否处于暂停状态（非进行中/暂停状态调用返回 False）。
+        """
         if self.state == GameState.PAUSED:
             self.resume()
-        else:
+            return False
+        if self.state == GameState.PLAYING:
             self.pause()
+            return True
+        return False
+
+    @property
+    def is_paused(self) -> bool:
+        """当前是否处于暂停状态。"""
+        return self.state == GameState.PAUSED
 
     def back_to_menu(self) -> None:
         """返回主菜单。"""
@@ -232,6 +248,8 @@ class Game:
         """推进一帧逻辑，返回更新后的移动累加器。
 
         move_accumulator 达到当前移动间隔时蛇前进一格。
+        暂停（PAUSED）状态下直接返回，不做任何推进：
+        蛇不移动、食物不计时、本局用时也停止累加。
         """
         if self.state != GameState.PLAYING or self.snake is None or self.food_manager is None:
             return move_accumulator

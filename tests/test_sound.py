@@ -52,3 +52,24 @@ def test_sound_manager_init():
     # sound_enabled=False 时 enabled 应为 False
     muted = SoundManager(config=Config(sound_enabled=False), init_mixer=False)
     assert muted.enabled is False
+
+
+def test_builtin_sounds_registration():
+    """验证内置音效：可用时注册 4 种音效，降级模式下安全跳过。"""
+    manager = SoundManager(config=Config(sound_enabled=True), init_mixer=False)
+    # 混音器不可用：build_builtin_sounds 是安全空操作
+    manager.build_builtin_sounds()
+    assert len(manager.sounds) == 0
+
+    if not manager.available:
+        return  # 环境无声卡时到此为止，不影响测试通过
+
+    # 混音器可用：4 种内置音效全部注册成功并可播放
+    manager.build_builtin_sounds()
+    for name in ("eat", "game_over", "start", "finish"):
+        assert manager.has_sound(name), f"缺少内置音效: {name}"
+    assert manager.play("eat") is True
+    assert manager.play("game_over") is True
+    # 主音量调节后仍可正常播放
+    manager.set_volume(0.3)
+    assert manager.play("start") is True

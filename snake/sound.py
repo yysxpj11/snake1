@@ -72,6 +72,68 @@ class SoundManager:
         else:
             logger.info("无可用音频设备，SoundManager 进入静音降级模式")
 
+    # -- 内置音效定义 -------------------------------------------------------
+
+    def build_builtin_sounds(self) -> None:
+        """合成并注册全部内置音效（不依赖任何外部素材文件）。
+
+        - eat:       吃食物 —— 短促上扬的"叮"声（正弦波滑音 660→990Hz）
+        - game_over: 撞墙 / 咬到自己 —— 低沉下滑音（方波 330→82Hz）
+        - start:     游戏开始 —— 两连升调的简短开场音
+        - finish:    游戏结束 —— 三连降调的收尾音
+        """
+        if not self.available:
+            logger.debug("混音器不可用，跳过内置音效合成")
+            return
+        # 吃食物：短促上扬，听觉上"清脆"
+        self.register("eat", self.synthesize(0.09, 660.0, 990.0, WAVE_SINE, volume=0.9))
+        # 游戏结束：低沉下滑，带方波的"失败感"
+        self.register("game_over", self.synthesize(0.5, 330.0, 82.0, WAVE_SQUARE, volume=0.8))
+        # 开始音：两段升调（低→高，间隔留白模拟连音）
+        self.register("start", self._build_start_sound())
+        # 结束音：三段降调
+        self.register("finish", self._build_finish_sound())
+        logger.info("内置音效合成完成：%s", ", ".join(sorted(self.sounds)))
+
+    def _concat_sounds(self, segments: list) -> Optional["object"]:
+        """把多段（时长, 起始频率, 结束频率, 波形, 音量）描述按顺序拼接成一段音效。"""
+        if not self.available:
+            return None
+        import pygame
+
+        total = sum(int(self.sample_rate * seg[0]) for seg in segments)
+        buf = array.array("h", bytes(2 * total))
+        offset = 0
+        for duration, start_freq, end_freq, wave, volume in segments:
+            seg = self.synthesize(duration, start_freq, end_freq, wave, volume)
+            if seg is None:
+                return None
+            # pygame.mixer.Sound 的原始样本可通过 get_raw() 取出，按 int16 拷贝拼接
+            samples = seg.get_raw()
+            count = len(samples) // 2
+            buf[offset : offset + count] = array.array("h", samples)
+            offset += count
+        return pygame.mixer.Sound(buffer=buf.tobytes())
+
+    def _build_start_sound(self) -> Optional["object"]:
+        """合成开场音：两段升调（523Hz→659Hz，659Hz→784Hz）。"""
+        return self._concat_sounds(
+            [
+                (0.08, 523.0, 659.0, WAVE_SINE, 0.85),
+                (0.12, 659.0, 784.0, WAVE_SINE, 0.85),
+            ]
+        )
+
+    def _build_finish_sound(self) -> Optional["object"]:
+        """合成收尾音：三段降调（659Hz→523Hz，523Hz→392Hz，392Hz→262Hz）。"""
+        return self._concat_sounds(
+            [
+                (0.12, 659.0, 523.0, WAVE_SINE, 0.8),
+                (0.12, 523.0, 392.0, WAVE_SINE, 0.75),
+                (0.2, 392.0, 262.0, WAVE_SINE, 0.7),
+            ]
+        )
+
     # -- 混音器与音量 -------------------------------------------------------
 
     def _try_init_mixer(self) -> bool:

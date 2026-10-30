@@ -29,9 +29,11 @@ class TestMenuStateSwitching:
         assert menu.selected_index == 0
         assert menu.selected_action == "start"
 
-        # 向下两次：开始游戏 -> 难度 -> 退出
+        # 向下三次：开始游戏 -> 难度 -> 皮肤 -> 退出
         menu.handle_key("down")
         assert menu.selected_action == "difficulty"
+        menu.handle_key("down")
+        assert menu.selected_action == "skin"
         menu.handle_key("down")
         assert menu.selected_action == "quit"
 
@@ -43,7 +45,9 @@ class TestMenuStateSwitching:
         menu.handle_key("up")
         assert menu.selected_action == "quit"
 
-        # 再向上两次：退出 -> 难度 -> 开始游戏
+        # 再向上三次：退出 -> 皮肤 -> 难度 -> 开始游戏
+        menu.handle_key("up")
+        assert menu.selected_action == "skin"
         menu.handle_key("up")
         assert menu.selected_action == "difficulty"
         menu.handle_key("up")
@@ -77,7 +81,9 @@ class TestMenuStateSwitching:
         # 动作名不受文本刷新影响
         assert menu.selected_action == "difficulty"
 
-        # 选中退出项并确认
+        # 选中退出项并确认（中间跳过皮肤项）
+        menu.handle_key("down")
+        assert menu.selected_action == "skin"
         menu.handle_key("down")
         assert menu.handle_key("confirm") == "quit"
         assert actions == ["difficulty", "quit"]

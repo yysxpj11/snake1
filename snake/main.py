@@ -20,6 +20,7 @@ import pygame
 
 from .food import FoodType
 from .game import Game, GameState
+from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
 from .utils import Config, Difficulty, HighScoreStore, setup_logging
@@ -91,15 +92,21 @@ class Application:
         self.config = config
         self.screen = Screen(config)
         self.store = HighScoreStore()
+        # 皮肤管理：默认经典绿，同步到窗口背景
+        self.skin_manager = SkinManager()
+        self.screen.apply_skin(self.skin_manager.current)
         # 音效管理：读取设置中的开关与音量，合成全部内置音效
         self.sound = SoundManager(config=config)
         self.sound.build_builtin_sounds()
         self.game = Game(config=config, seed=seed, store=self.store, sound=self.sound)
-        # 菜单逻辑：确认开始游戏、左右键切换难度、退出程序
+        # 菜单逻辑：确认开始游戏、左右键切换难度/皮肤、退出程序
         self.menu_logic = Menu(
             on_select=self._on_menu_select,
             difficulty=self.config.difficulty,
             on_difficulty_change=self._on_difficulty_change,
+            skin=self.skin_manager.current.name,
+            skin_names=self.skin_manager.names(),
+            on_skin_change=self._on_skin_change,
         )
         self.menu = MenuRenderer(self.screen)
         # 预创建一局数据后立即回到菜单状态，保证启动第一屏是开始菜单
@@ -124,6 +131,11 @@ class Application:
         """难度切换回调：写入设置并同步得分倍率（速度在每帧读取设置）。"""
         self.config.difficulty = difficulty
         self.game.score_manager.multiplier = difficulty.score_multiplier
+
+    def _on_skin_change(self, skin_name: str) -> None:
+        """皮肤切换回调：更新 SkinManager 并重建窗口背景配色。"""
+        self.skin_manager.set_current(skin_name)
+        self.screen.apply_skin(self.skin_manager.current)
 
     # -- 事件 ---------------------------------------------------------------
 
@@ -217,7 +229,7 @@ class Application:
         """按状态渲染当前画面。"""
         state = self.game.state
         if state == GameState.MENU:
-            self.menu.draw_main_menu(self.game.best_score, self.menu_logic)
+            self.menu.draw_main_menu(self.game.best_score, self.menu_logic, self.skin_manager)
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._render_playfield()
             if state == GameState.PAUSED:
@@ -237,9 +249,9 @@ class Application:
         game = self.game
         if game.snake is None or game.food_manager is None:
             return
-        # 直接使用 GameRenderer 绘制实体与特效
+        # 直接使用 GameRenderer 绘制实体与特效（读取当前皮肤配色）
         if not hasattr(self, "play_renderer"):
-            self.play_renderer = GameRenderer(self.screen)
+            self.play_renderer = GameRenderer(self.screen, self.skin_manager)
         self.play_renderer.draw_foods(game.food_manager.foods)
         self.play_renderer.draw_snake(game.snake)
         ratio = game.speed_effect_ratio()

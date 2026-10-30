@@ -83,6 +83,53 @@ class TestSkinManager:
         assert custom_manager.names() == ["测试皮"]
         assert build_builtin_skins()[0].name == SKIN_CLASSIC
 
+    def test_menu_skin_switch_with_preview_state(self) -> None:
+        """菜单"选择皮肤"项：左右键循环切换、标签实时刷新、回调按序触发。"""
+        from snake.ui import Menu
+
+        names = [SKIN_CLASSIC, SKIN_NEON, SKIN_FLAME]
+        changes: list = []
+        menu = Menu(skin=SKIN_CLASSIC, skin_names=names, on_skin_change=changes.append)
+
+        # 默认菜单含皮肤项，位于难度项之后
+        assert menu.skin_index == 2
+        assert menu.items[2][0] == f"选择皮肤: {SKIN_CLASSIC}"
+
+        # 未选中皮肤项时，左右键不切换皮肤
+        menu.handle_key("right")
+        assert menu.skin == SKIN_CLASSIC
+        assert changes == []
+
+        # 选中皮肤项后，右键：经典绿 -> 霓虹蓝（标签实时刷新）
+        menu.handle_key("down")
+        menu.handle_key("down")
+        assert menu.selected_action == "skin"
+        menu.handle_key("right")
+        assert menu.skin == SKIN_NEON
+        assert menu.items[2][0] == f"选择皮肤: {SKIN_NEON}"
+
+        # 继续右键循环：霓虹蓝 -> 烈焰橙 -> 经典绿（首尾循环）
+        menu.handle_key("right")
+        assert menu.skin == SKIN_FLAME
+        menu.handle_key("right")
+        assert menu.skin == SKIN_CLASSIC
+
+        # 左键回退：经典绿 -> 烈焰橙
+        menu.handle_key("left")
+        assert menu.skin == SKIN_FLAME
+
+        # 回调按切换顺序记录（不含未选中时的无效按键）
+        assert changes == [SKIN_NEON, SKIN_FLAME, SKIN_CLASSIC, SKIN_FLAME]
+
+        # 确认皮肤项同样切到下一套
+        menu.handle_key("confirm")
+        assert menu.skin == SKIN_CLASSIC
+
+        # SkinManager 与菜单状态一致：set_current 后标签含义不变
+        manager = SkinManager()
+        manager.set_current(menu.skin)
+        assert manager.current.name == menu.skin
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

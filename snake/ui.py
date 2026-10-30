@@ -64,16 +64,26 @@ class Screen:
         self.fonts = FontBank()
         self._grid_surface = self._build_grid_surface()
 
-    def _build_grid_surface(self) -> pygame.Surface:
-        """预绘制网格线到离屏 Surface，每帧直接贴图以提高性能。"""
+    def _build_grid_surface(self, background=None, grid_line=None) -> pygame.Surface:
+        """预绘制网格线到离屏 Surface，每帧直接贴图以提高性能。
+
+        background / grid_line 缺省时使用默认调色板；
+        传入皮肤配色时按皮肤颜色绘制（供换肤调用）。
+        """
+        bg = background if background is not None else Palette.BACKGROUND
+        line = grid_line if grid_line is not None else Palette.GRID_LINE
         surf = pygame.Surface((self.config.window_width, self.config.window_height))
-        surf.fill(Palette.BACKGROUND)
+        surf.fill(bg)
         cs = self.config.cell_size
         for x in range(0, self.config.window_width, cs):
-            pygame.draw.line(surf, Palette.GRID_LINE, (x, 0), (x, self.config.window_height))
+            pygame.draw.line(surf, line, (x, 0), (x, self.config.window_height))
         for y in range(0, self.config.window_height, cs):
-            pygame.draw.line(surf, Palette.GRID_LINE, (0, y), (self.config.window_width, y))
+            pygame.draw.line(surf, line, (0, y), (self.config.window_width, y))
         return surf
+
+    def apply_skin(self, skin) -> None:
+        """应用皮肤配色：重建网格背景 Surface（背景色 + 网格线色）。"""
+        self._grid_surface = self._build_grid_surface(skin.background, skin.grid_line)
 
     def draw_background(self) -> None:
         """绘制背景与网格。"""
@@ -220,25 +230,38 @@ class HUD:
 
 
 class GameRenderer:
-    """游戏进行中的场景渲染器。"""
+    """游戏进行中的场景渲染器。
 
-    def __init__(self, screen: Screen) -> None:
-        """记录屏幕引用。"""
+    传入 skin_manager 时蛇/食物颜色取自当前皮肤，实现游戏内换肤；
+    未传入时回退到默认调色板（兼容旧调用）。
+    """
+
+    def __init__(self, screen: Screen, skin_manager=None) -> None:
+        """记录屏幕与皮肤管理器引用。"""
         self.screen = screen
+        self.skin_manager = skin_manager
+
+    def _skin(self):
+        """返回当前皮肤；未接入皮肤管理时返回 None（回退默认配色）。"""
+        return self.skin_manager.current if self.skin_manager is not None else None
 
     # -- 蛇 -----------------------------------------------------------------
 
     def draw_snake(self, snake: Snake) -> None:
-        """绘制整条蛇：头、身、尾使用不同颜色。"""
+        """绘制整条蛇：头、身、尾使用不同颜色（优先取当前皮肤配色）。"""
+        skin = self._skin()
+        head_color = skin.snake_head if skin is not None else Palette.SNAKE_HEAD
+        body_color = skin.snake_body if skin is not None else Palette.SNAKE_BODY
+        tail_color = skin.snake_tail if skin is not None else Palette.SNAKE_TAIL
         n = snake.length
         for index, seg in enumerate(snake):
             rect = self.screen.cell_rect(seg.position)
             if index == 0:
-                color = Palette.SNAKE_HEAD
+                color = head_color
             elif index == n - 1:
-                color = Palette.SNAKE_TAIL
+                color = tail_color
             else:
-                color = Palette.SNAKE_BODY
+                color = body_color
             if seg.is_new:
                 color = Palette.lighten(color, 0.35)
             pygame.draw.rect(self.screen.surface, color, rect, border_radius=4)
@@ -262,13 +285,21 @@ class GameRenderer:
     # -- 食物 ---------------------------------------------------------------
 
     def draw_food(self, food: Food) -> None:
-        """按类型绘制食物，特殊食物附带剩余时间指示环。"""
+        """按类型绘制食物（优先取当前皮肤配色），特殊食物附带剩余时间指示环。"""
+        skin = self._skin()
         rect = self.screen.cell_rect(food.position)
-        color_map = {
-            FoodType.NORMAL: Palette.FOOD_NORMAL,
-            FoodType.GOLDEN: Palette.FOOD_GOLDEN,
-            FoodType.SPEED: Palette.FOOD_SPEED,
-        }
+        if skin is not None:
+            color_map = {
+                FoodType.NORMAL: skin.food_normal,
+                FoodType.GOLDEN: skin.food_golden,
+                FoodType.SPEED: skin.food_speed,
+            }
+        else:
+            color_map = {
+                FoodType.NORMAL: Palette.FOOD_NORMAL,
+                FoodType.GOLDEN: Palette.FOOD_GOLDEN,
+                FoodType.SPEED: Palette.FOOD_SPEED,
+            }
         color = color_map.get(food.ftype, Palette.FOOD_NORMAL)
         pygame.draw.circle(self.screen.surface, color, rect.center, rect.width // 2 - 1)
         if food.is_special:
@@ -340,26 +371,44 @@ class Menu:
         on_select=None,
         difficulty: Optional[Difficulty] = None,
         on_difficulty_change=None,
+        skin: Optional[str] = None,
+        skin_names: Optional[List[str]] = None,
+        on_skin_change=None,
     ) -> None:
-        """初始化菜单项、选中状态与难度档位。
+        """初始化菜单项、选中状态与难度/皮肤档位。
 
         Args:
-            items: 菜单项列表 [(文本, 动作名)]，默认 开始游戏/选择难度/退出。
+            items: 菜单项列表 [(文本, 动作名)]，默认 开始/难度/皮肤/退出。
             on_select: 确认菜单项时的回调，参数为动作名。
             difficulty: 初始难度档位，默认 NORMAL。
             on_difficulty_change: 难度切换时的回调，参数为新的 Difficulty。
+            skin: 初始皮肤名称，默认 None（由渲染层填充文本）。
+            skin_names: 全部可选皮肤名称列表（供左右键循环切换）。
+            on_skin_change: 皮肤切换时的回调，参数为新皮肤名称。
         """
         self.difficulty: Difficulty = difficulty or Difficulty.NORMAL
         self.on_difficulty_change = on_difficulty_change
+        self.skin: str = skin or ""
+        self.skin_names: List[str] = list(skin_names) if skin_names else []
+        self.on_skin_change = on_skin_change
         if items is None:
             items = [
                 ("开始游戏", "start"),
                 (f"选择难度: {self.difficulty.label}", "difficulty"),
+                (f"选择皮肤: {self.skin}" if self.skin else "选择皮肤", "skin"),
                 ("退出", "quit"),
             ]
         self.items: List[Tuple[str, str]] = list(items)
         self.selected_index = 0
         self.on_select = on_select
+
+    @property
+    def skin_index(self) -> int:
+        """返回皮肤项在菜单中的下标，找不到返回 -1。"""
+        for index, (_text, action) in enumerate(self.items):
+            if action == "skin":
+                return index
+        return -1
 
     @property
     def difficulty_index(self) -> int:
@@ -408,12 +457,39 @@ class Menu:
         self.set_difficulty(new_difficulty)
         return new_difficulty
 
+    def set_skin(self, skin_name: str, notify: bool = True) -> None:
+        """设置当前皮肤并刷新菜单标签，notify=True 时触发切换回调。"""
+        self.skin = skin_name
+        index = self.skin_index
+        if index >= 0:
+            self.set_item_text(index, f"选择皮肤: {skin_name}")
+        if notify and self.on_skin_change is not None:
+            self.on_skin_change(skin_name)
+
+    def cycle_skin(self, step: int) -> str:
+        """在 skin_names 列表中按 step 方向循环切换皮肤，返回新皮肤名。
+
+        列表为空或当前皮肤不在列表中时，从第一套开始。
+        """
+        if not self.skin_names:
+            return self.skin
+        try:
+            index = self.skin_names.index(self.skin)
+        except ValueError:
+            index = 0
+        new_skin = self.skin_names[(index + step) % len(self.skin_names)]
+        self.set_skin(new_skin)
+        return new_skin
+
     def confirm(self) -> Optional[str]:
         """确认当前选中项，触发回调并返回动作名（无回调时仅返回动作名）。"""
         action = self.selected_action
         # 难度项上的确认等价于切到下一档
         if action == "difficulty":
             self.cycle_difficulty(1)
+        # 皮肤项上的确认等价于切到下一套皮肤
+        if action == "skin":
+            self.cycle_skin(1)
         if self.on_select is not None:
             self.on_select(action)
         return action
@@ -421,7 +497,7 @@ class Menu:
     def handle_key(self, key: str) -> Optional[str]:
         """处理一个抽象按键，key 可为 up / down / left / right / confirm。
 
-        左右键仅在选中"选择难度"时生效，用于切换三档难度；
+        左右键仅在选中"选择难度"或"选择皮肤"时生效，用于切换档位/皮肤；
         返回 confirm 产生的动作名，其余操作返回 None。
         """
         if key == "up":
@@ -430,9 +506,13 @@ class Menu:
         if key == "down":
             self.move_down()
             return None
-        if key in ("left", "right") and self.selected_action == "difficulty":
-            self.cycle_difficulty(-1 if key == "left" else 1)
-            return None
+        if key in ("left", "right"):
+            if self.selected_action == "difficulty":
+                self.cycle_difficulty(-1 if key == "left" else 1)
+                return None
+            if self.selected_action == "skin":
+                self.cycle_skin(-1 if key == "left" else 1)
+                return None
         if key == "confirm":
             return self.confirm()
         return None
@@ -478,7 +558,7 @@ class MenuRenderer:
         """初始化并创建菜单按钮组与渐变背景缓存。"""
         self.screen = screen
         self.buttons: List[Button] = []
-        self._gradient: Optional[pygame.Surface] = None
+        self._gradients: Dict[str, pygame.Surface] = {}
         self._build_main_menu()
 
     def _make_button(self, text: str, index: int, on_click) -> Button:
@@ -495,12 +575,25 @@ class MenuRenderer:
         self.buttons.append(self._make_button("难度: 普通", 1, None))
         self.buttons.append(self._make_button("退出", 2, None))
 
-    def _ensure_gradient(self) -> pygame.Surface:
-        """获取（或首次生成）菜单用的深色渐变背景。"""
-        if self._gradient is None:
+    def _ensure_gradient(self, skin=None) -> pygame.Surface:
+        """获取（或按皮肤首次生成）菜单用的深色渐变背景。
+
+        skin 为 None 时使用默认深色渐变；传入皮肤时以皮肤背景色
+        生成专属渐变并缓存（键为皮肤名），实现菜单实时换肤。
+        """
+        from .skin import Skin
+
+        key = skin.name if isinstance(skin, Skin) else "default"
+        if key not in self._gradients:
             w, h = self.screen.config.window_width, self.screen.config.window_height
-            self._gradient = build_vertical_gradient(w, h)
-        return self._gradient
+            if isinstance(skin, Skin):
+                bg = skin.background
+                top = Palette.lighten(bg, 0.5)
+                bottom = tuple(int(c * 0.35) for c in bg)
+                self._gradients[key] = build_vertical_gradient(w, h, top, bottom)
+            else:
+                self._gradients[key] = build_vertical_gradient(w, h)
+        return self._gradients[key]
 
     def item_rects(self, menu: "Menu") -> List[pygame.Rect]:
         """计算各菜单项的屏幕矩形，与绘制位置保持一致（供点击命中使用）。"""
@@ -513,14 +606,20 @@ class MenuRenderer:
             rects.append(rect)
         return rects
 
-    def draw_main_menu(self, best_score: int, menu: "Menu") -> None:
-        """绘制开始菜单：深色渐变背景 + 居中标题 + 键盘选中高亮。"""
-        self.screen.surface.blit(self._ensure_gradient(), (0, 0))
+    def draw_main_menu(self, best_score: int, menu: "Menu", skin_manager=None) -> None:
+        """绘制开始菜单：深色渐变背景 + 居中标题 + 键盘选中高亮。
+
+        skin_manager 传入时按当前皮肤实时换肤：渐变背景、标题颜色、
+        选中边框与皮肤预览条全部取自当前皮肤配色。
+        """
+        skin = skin_manager.current if skin_manager is not None else None
+        self.screen.surface.blit(self._ensure_gradient(skin), (0, 0))
         w, h = self.screen.config.window_width, self.screen.config.window_height
         fonts = self.screen.fonts
 
-        # 标题与最高分
-        title = fonts.render("贪吃蛇", 64, Palette.SNAKE_HEAD)
+        # 标题与最高分（标题取皮肤强调色，实现菜单级实时预览）
+        title_color = skin.accent if skin is not None else Palette.SNAKE_HEAD
+        title = fonts.render("贪吃蛇", 64, title_color)
         title_rect = title.get_rect(center=(w // 2, int(h * 0.26)))
         self.screen.surface.blit(title, title_rect)
         sub = fonts.render(f"历史最高分: {best_score}", 24, Palette.TEXT_DIM)
@@ -533,7 +632,11 @@ class MenuRenderer:
             rect = rects[index]
             selected = index == menu.selected_index
             bg = Palette.BUTTON_HOVER if selected else Palette.BUTTON_BG
-            border = Palette.SNAKE_HEAD if selected else Palette.PANEL_BORDER
+            border = (
+                (skin.snake_head if skin is not None else Palette.SNAKE_HEAD)
+                if selected
+                else Palette.PANEL_BORDER
+            )
             pygame.draw.rect(self.screen.surface, bg, rect, border_radius=8)
             pygame.draw.rect(self.screen.surface, border, rect, 2, border_radius=8)
             text_color = Palette.TEXT_PRIMARY if selected else Palette.TEXT_DIM
@@ -544,14 +647,50 @@ class MenuRenderer:
             # 难度项右侧绘制三档档位条，高亮当前档位
             if action == "difficulty":
                 self._draw_difficulty_chips(rect, menu, selected)
+            # 皮肤项右侧绘制皮肤预览条（各皮肤蛇头色样 + 名称）
+            elif action == "skin" and skin_manager is not None:
+                self._draw_skin_chips(rect, menu, skin_manager, selected)
 
         self.screen.draw_text(
-            "↑/↓ 选择 · ←/→ 切换难度 · 回车 确认 · ESC 退出",
+            "↑/↓ 选择 · ←/→ 切换难度/皮肤 · 回车 确认 · ESC 退出",
             (w // 2, h - 36),
             16,
             Palette.TEXT_DIM,
             center=True,
         )
+
+    def _draw_skin_chips(
+        self, item_rect: pygame.Rect, menu: "Menu", skin_manager, active: bool
+    ) -> None:
+        """在皮肤菜单项右侧绘制各皮肤预览条：色块 + 皮肤名，高亮当前皮肤。
+
+        每个预览条左侧画该皮肤的蛇头颜色方块（实时预览主色调），
+        当前皮肤条使用该皮肤的蛇头色描边并提亮。
+        """
+        fonts = self.screen.fonts
+        chip_w, chip_h, gap = 76, 28, 8
+        chips = skin_manager.skins
+        total_w = len(chips) * chip_w + (len(chips) - 1) * gap
+        x = item_rect.right + 16
+        y = item_rect.centery - chip_h // 2
+        max_x = self.screen.config.window_width - total_w - 10
+        x = min(x, max_x)
+        for index, chip_skin in enumerate(chips):
+            chip = pygame.Rect(x + index * (chip_w + gap), y, chip_w, chip_h)
+            is_current = chip_skin.name == menu.skin
+            bg_color = Palette.BUTTON_HOVER if is_current else (
+                Palette.BUTTON_BG if active else Palette.PANEL_BG
+            )
+            pygame.draw.rect(self.screen.surface, bg_color, chip, border_radius=6)
+            border_color = chip_skin.snake_head if is_current else Palette.PANEL_BORDER
+            pygame.draw.rect(self.screen.surface, border_color, chip, 2 if is_current else 1, border_radius=6)
+            # 皮肤主色方块（预览）
+            dot = pygame.Rect(0, 0, 10, 10)
+            dot.center = (chip.x + 13, chip.centery)
+            pygame.draw.rect(self.screen.surface, chip_skin.snake_head, dot, border_radius=2)
+            label = fonts.render(chip_skin.name, 13, Palette.TEXT_PRIMARY if is_current else Palette.TEXT_DIM)
+            label_rect = label.get_rect(midleft=(chip.x + 24, chip.centery))
+            self.screen.surface.blit(label, label_rect)
 
     def _draw_difficulty_chips(self, item_rect: pygame.Rect, menu: "Menu", active: bool) -> None:
         """在难度菜单项右侧绘制 简单/普通/困难 三个档位标签，高亮当前档位。

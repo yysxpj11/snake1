@@ -20,11 +20,16 @@ import pygame
 
 from .food import FoodType
 from .game import Game, GameState
+from .highscore import HighScoreManager
 from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
-from .utils import Config, Difficulty, HighScoreStore, setup_logging
+from .utils import Config, Difficulty, setup_logging
 from .ui import GameRenderer, Menu, MenuRenderer, Screen
+
+
+# 长按 C 键清除最高分所需的按住时长（秒）
+CLEAR_HOLD_SECONDS = 1.0
 
 
 # 方向键映射表：pygame 键码 -> Direction
@@ -91,7 +96,8 @@ class Application:
         """初始化窗口、菜单与游戏对象；启动后先显示开始菜单。"""
         self.config = config
         self.screen = Screen(config)
-        self.store = HighScoreStore()
+        # 本地高分榜：独立 highscore.json，成绩自动落盘
+        self.store = HighScoreManager()
         # 皮肤管理：默认经典绿，同步到窗口背景
         self.skin_manager = SkinManager()
         self.screen.apply_skin(self.skin_manager.current)
@@ -115,6 +121,12 @@ class Application:
         self.hud_message = ""
         self.move_accumulator = 0.0
         self.running = True
+        # 长按 C 清除最高分的输入状态
+        self._clear_armed = False   # C 键是否处于按下状态
+        self._clear_hold = 0.0      # 已按住时长（秒）
+        self._clear_done = False    # 本次按住是否已执行清除
+        self.notice = ""            # 菜单底部临时提示
+        self.notice_timer = 0.0
 
     def _on_menu_select(self, action: str) -> None:
         """菜单确认回调：根据动作名执行开始游戏 / 退出。
@@ -160,15 +172,38 @@ class Application:
         self.menu_logic.selected_index = 0
 
     def _handle_menu_events(self, events: List[pygame.event.Event]) -> None:
-        """处理菜单状态事件：↑↓ 选择、←→ 切难度、回车确认、鼠标点击。"""
+        """处理菜单状态事件：↑↓ 选择、←→ 切难度/皮肤、回车确认、鼠标点击、长按 C 清榜。"""
         for event in events:
             if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_c:
+                    # 开始计时"长按 C"，达到阈值后在 update 中清除最高分
+                    self._clear_armed = True
+                    self._clear_hold = 0.0
+                    self._clear_done = False
+                    continue
                 menu_key = KEY_MENU_MAP.get(event.key)
                 if menu_key is not None:
                     self.menu_logic.handle_key(menu_key)
+            elif event.type == pygame.KEYUP and event.key == pygame.K_c:
+                # 松开 C 键：时长未达阈值即取消
+                self._clear_armed = False
+                self._clear_hold = 0.0
             elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 rects = self.menu.item_rects(self.menu_logic)
                 self.menu_logic.handle_click_at(event.pos, rects)
+
+    def _update_clear_hold(self, dt: float) -> None:
+        """累计 C 键按住时长，达到阈值时清除最高分记录（每次按住只清一次）。"""
+        if not self._clear_armed or self._clear_done:
+            return
+        self._clear_hold += dt
+        if self._clear_hold >= CLEAR_HOLD_SECONDS:
+            self._clear_done = True
+            self.store.clear()
+            self.notice = "最高分记录已清除"
+            self.notice_timer = 3.0
+            logger = setup_logging()
+            logger.info("最高分记录已清除")
 
     def _start_game(self) -> None:
         """开始新一局。"""
@@ -224,7 +259,15 @@ class Application:
     # -- 更新与渲染 ---------------------------------------------------------
 
     def update(self, dt: float) -> None:
-        """推进一帧游戏逻辑。"""
+        """推进一帧游戏逻辑（含菜单中的长按清榜与提示计时）。"""
+        # 临时提示倒计时（菜单底部"已清除"文字）
+        if self.notice_timer > 0:
+            self.notice_timer = max(0.0, self.notice_timer - dt)
+            if self.notice_timer == 0:
+                self.notice = ""
+        if self.game.state == GameState.MENU:
+            self._update_clear_hold(dt)
+            return
         if self.game.state == GameState.PLAYING:
             self.move_accumulator = self.game.step(dt, self.move_accumulator)
 
@@ -232,7 +275,9 @@ class Application:
         """按状态渲染当前画面。"""
         state = self.game.state
         if state == GameState.MENU:
-            self.menu.draw_main_menu(self.game.best_score, self.menu_logic, self.skin_manager)
+            self.menu.draw_main_menu(
+                self.game.best_score, self.menu_logic, self.skin_manager, self.notice
+            )
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._render_playfield()
             if state == GameState.PAUSED:

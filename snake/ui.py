@@ -336,10 +336,7 @@ class GameRenderer:
 
     def _dim_overlay(self, alpha: int = 160) -> None:
         """在全屏上叠加半透明黑色遮罩。"""
-        w, h = self.screen.config.window_width, self.screen.config.window_height
-        overlay = pygame.Surface((w, h), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, alpha))
-        self.screen.surface.blit(overlay, (0, 0))
+        draw_dim_overlay(self.screen.surface, alpha)
 
     def draw_speed_effect(self, active: bool, ratio: float) -> None:
         """加速效果激活时在屏幕边缘绘制蓝色光晕。"""
@@ -546,6 +543,14 @@ def build_vertical_gradient(
     return surface
 
 
+def draw_dim_overlay(surface: pygame.Surface, alpha: int = 160) -> None:
+    """在给定 Surface 上叠加半透明黑色遮罩（暂停/结束画面共用）。"""
+    w, h = surface.get_size()
+    overlay = pygame.Surface((w, h), pygame.SRCALPHA)
+    overlay.fill((0, 0, 0, alpha))
+    surface.blit(overlay, (0, 0))
+
+
 class MenuRenderer:
     """主菜单、结束画面等静态界面的渲染与按钮管理。"""
 
@@ -606,11 +611,14 @@ class MenuRenderer:
             rects.append(rect)
         return rects
 
-    def draw_main_menu(self, best_score: int, menu: "Menu", skin_manager=None) -> None:
+    def draw_main_menu(
+        self, best_score: int, menu: "Menu", skin_manager=None, notice: Optional[str] = None
+    ) -> None:
         """绘制开始菜单：深色渐变背景 + 居中标题 + 键盘选中高亮。
 
         skin_manager 传入时按当前皮肤实时换肤：渐变背景、标题颜色、
         选中边框与皮肤预览条全部取自当前皮肤配色。
+        notice 为底部临时提示（如"最高分记录已清除"）。
         """
         skin = skin_manager.current if skin_manager is not None else None
         self.screen.surface.blit(self._ensure_gradient(skin), (0, 0))
@@ -625,6 +633,11 @@ class MenuRenderer:
         sub = fonts.render(f"历史最高分: {best_score}", 24, Palette.TEXT_DIM)
         sub_rect = sub.get_rect(center=(w // 2, int(h * 0.26) + 58))
         self.screen.surface.blit(sub, sub_rect)
+        # 临时提示（清除最高分后的反馈），显示在最高分下方
+        if notice:
+            self.screen.draw_text(
+                notice, (w // 2, int(h * 0.26) + 92), 18, Palette.DANGER, center=True
+            )
 
         # 菜单项：选中项高亮加边框，未选中项半透明暗色
         rects = self.item_rects(menu)
@@ -652,7 +665,7 @@ class MenuRenderer:
                 self._draw_skin_chips(rect, menu, skin_manager, selected)
 
         self.screen.draw_text(
-            "↑/↓ 选择 · ←/→ 切换难度/皮肤 · 回车 确认 · ESC 退出",
+            "↑/↓ 选择 · ←/→ 切换难度/皮肤 · 回车 确认 · 长按 C 清除最高分 · ESC 退出",
             (w // 2, h - 36),
             16,
             Palette.TEXT_DIM,
@@ -725,14 +738,16 @@ class MenuRenderer:
     ) -> None:
         """绘制结束画面。"""
         self.screen.draw_background()
-        self._dim_overlay()
+        # 结束画面遮罩：半透明黑底（与暂停遮罩同一实现）
+        draw_dim_overlay(self.screen.surface)
         w, h = self.screen.config.window_width, self.screen.config.window_height
         cx, cy = w // 2, h // 2
         self.screen.draw_text("游戏结束", (cx, cy - 120), 56, Palette.DANGER, center=True)
         self.screen.draw_text(f"原因: {reason}", (cx, cy - 60), 24, Palette.TEXT_DIM, center=True)
         self.screen.draw_text(f"本局得分: {score}", (cx, cy), 32, Palette.TEXT_PRIMARY, center=True)
         if is_record:
-            self.screen.draw_text("新纪录！", (cx, cy + 44), 28, Palette.FOOD_GOLDEN, center=True)
+            # 破纪录：成绩已由 HighScoreManager 自动写入 highscore.json
+            self.screen.draw_text("新纪录！已保存", (cx, cy + 44), 28, Palette.FOOD_GOLDEN, center=True)
         else:
             self.screen.draw_text(f"最高分: {best}", (cx, cy + 44), 24, Palette.TEXT_DIM, center=True)
         self.screen.draw_text(

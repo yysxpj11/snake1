@@ -134,7 +134,7 @@ class Game:
         self,
         config: Optional[Config] = None,
         seed: Optional[int] = None,
-        store: Optional[HighScoreStore] = None,
+        store: Optional[object] = None,
         sound: Optional[SoundManager] = None,
     ) -> None:
         """初始化游戏：配置、实体容器、状态机、高分存储与音效管理器。"""

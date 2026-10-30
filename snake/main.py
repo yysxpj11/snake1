@@ -21,6 +21,7 @@ import pygame
 from .food import FoodType
 from .game import Game, GameState
 from .snake import Direction, WallMode
+from .sound import SoundManager
 from .utils import Config, Difficulty, HighScoreStore, setup_logging
 from .ui import GameRenderer, Menu, MenuRenderer, Screen
 
@@ -90,7 +91,10 @@ class Application:
         self.config = config
         self.screen = Screen(config)
         self.store = HighScoreStore()
-        self.game = Game(config=config, seed=seed, store=self.store)
+        # 音效管理：读取设置中的开关与音量，合成全部内置音效
+        self.sound = SoundManager(config=config)
+        self.sound.build_builtin_sounds()
+        self.game = Game(config=config, seed=seed, store=self.store, sound=self.sound)
         # 菜单逻辑：确认开始游戏、左右键切换难度、退出程序
         self.menu_logic = Menu(
             on_select=self._on_menu_select,
@@ -133,8 +137,14 @@ class Application:
             self._return_to_menu()
 
     def _return_to_menu(self) -> None:
-        """返回开始菜单，并把菜单选中项复位到第一项。"""
+        """返回开始菜单，并把菜单选中项复位到第一项。
+
+        从结束画面返回时视为"本局结束"，播放收尾音效。
+        """
+        was_game_over = self.game.state == GameState.GAME_OVER
         self.game.back_to_menu()
+        if was_game_over and self.sound is not None:
+            self.sound.play("finish")
         self.menu_logic.selected_index = 0
 
     def _handle_menu_events(self, events: List[pygame.event.Event]) -> None:

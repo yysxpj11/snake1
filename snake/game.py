@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .food import Food, FoodManager, FoodType
 from .snake import Direction, Snake, WallMode
+from .sound import SoundManager
 from .utils import Config, HighScoreStore, Timer, clamp
 
 
@@ -134,12 +135,14 @@ class Game:
         config: Optional[Config] = None,
         seed: Optional[int] = None,
         store: Optional[HighScoreStore] = None,
+        sound: Optional[SoundManager] = None,
     ) -> None:
-        """初始化游戏：配置、实体容器、状态机与高分存储。"""
+        """初始化游戏：配置、实体容器、状态机、高分存储与音效管理器。"""
         self.config = config or Config()
         self.config.clamp_to_window()
         self.rng = random.Random(seed)
         self.store = store or HighScoreStore()
+        self.sound = sound
         self.state = GameState.MENU
         self.score_manager = ScoreManager(self.config.difficulty_multiplier())
         self.stats = GameStats()
@@ -169,6 +172,9 @@ class Game:
         self.stats.reset()
         self.speed_timer = None
         self.state = GameState.PLAYING
+        # 游戏开始：播放开场音效（未接入音效时安全跳过）
+        if self.sound is not None:
+            self.sound.play("start")
 
     def pause(self) -> bool:
         """进入暂停状态（仅进行中可暂停），返回是否成功暂停。"""
@@ -302,6 +308,9 @@ class Game:
         gained = self.score_manager.register_eat(effect.score_delta)
         self.snake.grow(effect.growth)
         self.stats.register_eat(food.ftype)
+        # 吃到食物：播放进食音效
+        if self.sound is not None:
+            self.sound.play("eat")
         if effect.speed_boost > 0:
             self.speed_timer = Timer(effect.speed_boost)
         label = self.score_manager.combo_label()
@@ -314,6 +323,9 @@ class Game:
         if self.snake is not None:
             self.snake.alive = False
             self.snake.death_reason = reason
+        # 撞墙 / 咬到自己：播放游戏结束音效
+        if self.sound is not None:
+            self.sound.play("game_over")
         self.is_new_record = self.store.is_new_record(self.score)
         if self.score > 0:
             self.store.add_score(self.score)

@@ -130,6 +130,44 @@ class TestSkinManager:
         manager.set_current(menu.skin)
         assert manager.current.name == menu.skin
 
+    def test_skin_switch_by_s_key_in_game(self) -> None:
+        """游戏内按 S 键循环切换皮肤，且 S 不再触发"向下移动"。"""
+        import pygame
+
+        pygame.init()  # 初始化字体等子系统（Application 会创建窗口与 FontBank）
+        from snake.main import Application, build_config, parse_args
+        from snake.snake import Direction
+
+        app = Application(build_config(parse_args(["--width", "400", "--height", "400"])))
+        app.menu_logic.handle_key("confirm")  # 进入游戏
+        assert app.game.state.value == "playing"
+
+        initial_skin = app.skin_manager.current.name
+        initial_direction = app.game.snake.direction
+        initial_head = app.game.snake.head_position
+
+        # 模拟按下 S 键：皮肤切换到下一套，蛇的方向与位置不受影响
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s))
+        app.process_events()
+        assert app.skin_manager.current.name != initial_skin
+        assert app.menu_logic.skin == app.skin_manager.current.name  # 菜单标签同步
+        assert app.game.snake.direction == initial_direction
+        assert app.game.snake.head_position == initial_head
+
+        # 连按三次回到初始皮肤（三套皮肤循环）
+        for _ in range(2):
+            pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_s))
+            app.process_events()
+        assert app.skin_manager.current.name == initial_skin
+
+        # S 键不再映射为"向下"：方向输入应被忽略（未注册在方向表中）
+        assert pygame.K_s not in __import__("snake.main", fromlist=["KEY_DIRECTION_MAP"]).KEY_DIRECTION_MAP
+
+        # 方向键移动仍正常：按 W 依然向上（进入待应用方向队列）
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_w))
+        app.process_events()
+        assert Direction.UP in app.game.snake.pending_directions
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -28,11 +28,11 @@ from .ui import GameRenderer, Menu, MenuRenderer, Screen
 
 
 # 方向键映射表：pygame 键码 -> Direction
+# 注意：S 键已让位给"游戏内切换皮肤"，向下移动使用 ↓ 键
 KEY_DIRECTION_MAP = {
     pygame.K_UP: Direction.UP,
     pygame.K_w: Direction.UP,
     pygame.K_DOWN: Direction.DOWN,
-    pygame.K_s: Direction.DOWN,
     pygame.K_LEFT: Direction.LEFT,
     pygame.K_a: Direction.LEFT,
     pygame.K_RIGHT: Direction.RIGHT,
@@ -176,7 +176,7 @@ class Application:
         self.game.new_game()
 
     def _handle_playing_events(self, events: List[pygame.event.Event]) -> None:
-        """处理游戏进行中/暂停的事件：方向键移动、P 暂停/继续、M 回菜单。"""
+        """处理游戏进行中/暂停的事件：方向键移动、P 暂停/继续、S 切皮肤、M 回菜单。"""
         for event in events:
             if event.type == pygame.KEYDOWN:
                 direction = KEY_DIRECTION_MAP.get(event.key)
@@ -185,6 +185,9 @@ class Application:
                 elif event.key == pygame.K_p:
                     # P 键切换暂停 / 继续（暂停期间蛇与食物都不更新）
                     self.game.toggle_pause()
+                elif event.key == pygame.K_s:
+                    # S 键循环切换皮肤：换肤立即生效并同步菜单标签
+                    self.menu_logic.set_skin(self.skin_manager.next().name)
                 elif event.key == pygame.K_m:
                     self.game.back_to_menu()
 

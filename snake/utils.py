@@ -169,6 +169,7 @@ class Config:
         move_interval: 基础移动间隔秒数（难度会覆盖此值）。
         score_per_food: 普通食物得分。
         sound_enabled: 是否开启音效。
+        sound_volume: 音效主音量（0.0 - 1.0），供设置界面预留。
         fullscreen: 是否全屏运行。
         difficulty: 难度档位枚举（easy / normal / hard）。
         max_score_history: 高分榜最多保存条数。
@@ -181,6 +182,7 @@ class Config:
     move_interval: float = DEFAULT_MOVE_INTERVAL
     score_per_food: int = SCORE_PER_FOOD
     sound_enabled: bool = True
+    sound_volume: float = 0.7
     fullscreen: bool = False
     difficulty: Difficulty = Difficulty.NORMAL
     max_score_history: int = 10

@@ -596,6 +596,29 @@ class SettingsPanel:
         """向下切换选中项，到底循环回第一项。"""
         self.selected_index = (self.selected_index + 1) % len(self.items)
 
+    # 音量滑条每次左右键调整的步长（百分比）
+    VOLUME_STEP = 10
+
+    def adjust(self, step: int) -> None:
+        """按 step 方向调整当前选中设置项的暂存值（正数增大，负数减小）。
+
+        - 音量：步长 VOLUME_STEP，裁剪到 0-100；
+        - 难度：在三档之间循环切换；
+        - 皮肤：在 skin_names 中循环切换。
+        调整只改暂存值，回车保存后才应用到游戏。
+        """
+        action = self.selected_action
+        if action == "volume":
+            self.volume = max(0, min(100, self.volume + step * SettingsPanel.VOLUME_STEP))
+        elif action == "difficulty":
+            self.difficulty = self.difficulty.next() if step > 0 else self.difficulty.previous()
+        elif action == "skin" and self.skin_names:
+            try:
+                index = self.skin_names.index(self.skin)
+            except ValueError:
+                index = 0
+            self.skin = self.skin_names[(index + step) % len(self.skin_names)]
+
     def confirm(self) -> str:
         """回车保存：触发 on_save 回调并返回动作名 "save"。"""
         if self.on_save is not None:
@@ -609,16 +632,19 @@ class SettingsPanel:
         return "back"
 
     def handle_key(self, key: str) -> Optional[str]:
-        """处理一个抽象按键，key 可为 up / down / confirm。
+        """处理一个抽象按键，key 可为 up / down / left / right / confirm。
 
-        返回 confirm 产生的 "save"；其余操作返回 None。
-        （左右键调整数值的逻辑在设置项功能中接入。）
+        左右键调整当前选中设置项的数值；返回 confirm 产生的 "save"，
+        其余操作返回 None。
         """
         if key == "up":
             self.move_up()
             return None
         if key == "down":
             self.move_down()
+            return None
+        if key in ("left", "right"):
+            self.adjust(-1 if key == "left" else 1)
             return None
         if key == "confirm":
             return self.confirm()

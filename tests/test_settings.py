@@ -64,6 +64,52 @@ class TestSettingsPanel:
         assert low.volume == 0
         assert high.volume == 100
 
+    def test_panel_adjust_volume_difficulty_skin(self) -> None:
+        """左右键调整音量/难度/皮肤暂存值：边界裁剪与循环切换。"""
+        panel = SettingsPanel(
+            volume=0.5,
+            difficulty=Difficulty.NORMAL,
+            skin="经典绿",
+            skin_names=["经典绿", "霓虹蓝", "烈焰橙"],
+        )
+
+        # 音量项：右键 +10、左键 -10，到边界裁剪
+        panel.handle_key("right")
+        assert panel.volume == 60
+        panel.handle_key("left")
+        assert panel.volume == 50
+        for _ in range(6):
+            panel.handle_key("left")
+        assert panel.volume == 0
+        panel.handle_key("left")
+        assert panel.volume == 0  # 不为负
+
+        # 难度项：右键 普通 -> 困难 -> 简单（循环）
+        panel.handle_key("down")
+        assert panel.selected_action == "difficulty"
+        panel.handle_key("right")
+        assert panel.difficulty == Difficulty.HARD
+        panel.handle_key("right")
+        assert panel.difficulty == Difficulty.EASY
+        panel.handle_key("left")
+        assert panel.difficulty == Difficulty.HARD  # 左键从简单回退到困难
+        panel.handle_key("left")
+        assert panel.difficulty == Difficulty.NORMAL
+
+        # 皮肤项：右键 经典绿 -> 霓虹蓝，左键回退
+        panel.handle_key("down")
+        assert panel.selected_action == "skin"
+        panel.handle_key("right")
+        assert panel.skin == "霓虹蓝"
+        panel.handle_key("left")
+        assert panel.skin == "经典绿"
+
+        # 调整只是暂存：confirm 才把值交给回调
+        saved: list = []
+        panel.on_save = lambda v, d, s: saved.append((v, d, s))
+        panel.handle_key("confirm")
+        assert saved == [(panel.volume_ratio, Difficulty.NORMAL, "经典绿")]
+
 
 class TestSettingsStateFlow:
     """验证菜单 -> 设置面板 -> 菜单 的界面状态流转。"""
@@ -101,6 +147,56 @@ class TestSettingsStateFlow:
         assert app.game.state == GameState.PLAYING
         assert app.game.enter_settings() is False
         assert app.game.state == GameState.PLAYING
+
+    def test_settings_adjust_and_save_applies(self) -> None:
+        """面板中调整音量/难度/皮肤后回车保存，设置真正生效；ESC 则放弃。"""
+        pygame.init()
+        from snake.main import Application, build_config, parse_args
+        from snake.skin import SKIN_NEON
+
+        app = Application(build_config(parse_args(["--width", "400", "--height", "400"])))
+        settings_index = [a for _t, a in app.menu_logic.items].index("settings")
+        app.menu_logic.selected_index = settings_index
+        app.menu_logic.handle_key("confirm")
+        panel = app.settings_panel
+
+        # 调整：音量 70 -> 30，难度 -> 困难，皮肤 -> 霓虹蓝
+        panel.handle_key("left")
+        panel.handle_key("left")
+        panel.handle_key("left")
+        panel.handle_key("left")  # 音量 70 -> 30
+        assert panel.volume == 30
+        panel.handle_key("down")
+        panel.handle_key("right")  # 普通 -> 困难
+        panel.handle_key("down")
+        panel.handle_key("right")  # 经典绿 -> 霓虹蓝
+
+        # 保存前：设置未变
+        assert app.config.sound_volume == pytest.approx(0.7)
+        assert app.config.difficulty == Difficulty.NORMAL
+        assert app.skin_manager.current.name != SKIN_NEON
+
+        # 回车保存：音量/难度/皮肤全部生效并回到菜单
+        panel.handle_key("confirm")
+        assert app.game.state == GameState.MENU
+        assert app.config.sound_volume == pytest.approx(0.3)
+        assert app.sound.master_volume == pytest.approx(0.3)
+        assert app.config.difficulty == Difficulty.HARD
+        assert app.skin_manager.current.name == SKIN_NEON
+        # 菜单标签同步刷新
+        assert "困难" in app.menu_logic.items[app.menu_logic.difficulty_index][0]
+        assert SKIN_NEON in app.menu_logic.items[app.menu_logic.skin_index][0]
+
+        # 再次进入并调整后 ESC：修改被放弃，设置保持上次保存的值
+        app.notice = ""
+        app.menu_logic.selected_index = settings_index
+        app.menu_logic.handle_key("confirm")
+        app.settings_panel.handle_key("right")  # 音量 30 -> 40
+        assert app.settings_panel.volume == 40
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+        app.process_events()
+        assert app.game.state == GameState.MENU
+        assert app.config.sound_volume == pytest.approx(0.3)  # 未被 40 覆盖
 
 
 if __name__ == "__main__":

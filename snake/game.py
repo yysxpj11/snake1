@@ -152,6 +152,9 @@ class Game:
         self.speed_timer: Optional[Timer] = None
         self.wall_mode = WallMode.SOLID
         self.level = 1
+        # 打开设置面板前的状态：游戏内按 V 调整设置后需要原路返回，
+        # 不能让"关掉设置"变成"返回主菜单"而丢掉当前这一局。
+        self._state_before_settings: Optional[GameState] = None
 
     # -- 生命周期 -----------------------------------------------------------
 
@@ -173,6 +176,7 @@ class Game:
         self.stats.reset()
         self.speed_timer = None
         self.state = GameState.PLAYING
+        self._state_before_settings = None
         # 游戏开始：播放开场音效（未接入音效时安全跳过）
         if self.sound is not None:
             self.sound.play("start")
@@ -213,13 +217,36 @@ class Game:
     def back_to_menu(self) -> None:
         """返回主菜单。"""
         self.state = GameState.MENU
+        self._state_before_settings = None
 
     def enter_settings(self) -> bool:
-        """进入设置面板（仅从菜单可进入），成功返回 True。"""
-        if self.state != GameState.MENU:
+        """进入设置面板，成功返回 True。
+
+        除主菜单外，游戏进行中（PLAYING）与暂停中（PAUSED）也能进入，
+        对应"游戏中按 V 直接调设置"；此时面板覆盖在冻结的战场上，
+        SETTINGS 状态下 Game.step 会直接返回，所以蛇不会偷偷前进。
+        """
+        if self.state not in (GameState.MENU, GameState.PLAYING, GameState.PAUSED):
             return False
+        self._state_before_settings = self.state
         self.state = GameState.SETTINGS
         return True
+
+    def exit_settings(self) -> GameState:
+        """关闭设置面板并恢复到打开前的状态，返回恢复后的状态。
+
+        从菜单进入时回到 MENU；从游戏内进入时回到 PLAYING / PAUSED，
+        本局继续，不需要从头再来。
+        """
+        previous = self._state_before_settings or GameState.MENU
+        self.state = previous
+        self._state_before_settings = None
+        return self.state
+
+    @property
+    def settings_from_game(self) -> bool:
+        """当前设置面板是否是从游戏内（进行中/暂停）打开的。"""
+        return self._state_before_settings in (GameState.PLAYING, GameState.PAUSED)
 
     @property
     def score(self) -> int:

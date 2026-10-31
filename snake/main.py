@@ -164,7 +164,12 @@ class Application:
             self.running = False
 
     def _open_settings(self) -> None:
-        """进入设置面板状态，并以当前设置为初值创建面板。"""
+        """进入设置面板，并以当前生效设置为初值创建面板。
+
+        菜单中确认"设置"与游戏内按 V 走同一条入口；
+        关闭时由 Game.exit_settings 恢复到打开前的状态
+        （菜单回到菜单，游戏内回到进行中/暂停，本局不中断）。
+        """
         if self.game.enter_settings():
             self.settings_panel = SettingsPanel(
                 volume=self.config.sound_volume,
@@ -186,13 +191,23 @@ class Application:
         self._close_settings("设置已保存")
 
     def _on_settings_cancel(self) -> None:
-        """ESC 返回：放弃未保存的修改，直接回到菜单。"""
+        """ESC 返回：放弃未保存的修改，直接回到打开面板前的画面。"""
         self._close_settings("")
 
     def _close_settings(self, notice: str) -> None:
-        """关闭设置面板回到菜单，notice 为空时不显示提示。"""
-        self.game.back_to_menu()
+        """关闭设置面板，notice 为空时不显示提示。
+
+        根据打开来源决定去向：游戏内打开时回到进行中/暂停并复位移动累加器
+        （否则调设置花掉的时间会一次性攒起来，关掉瞬间连跳好几格）；
+        菜单中打开时回到菜单。
+        """
+        from_game = self.game.settings_from_game
         self.settings_panel = None
+        if from_game:
+            self.game.exit_settings()
+            self.move_accumulator = 0.0
+        else:
+            self.game.back_to_menu()
         if notice:
             self.notice = notice
             self.notice_timer = 3.0
@@ -284,7 +299,7 @@ class Application:
         self.game.new_game()
 
     def _handle_playing_events(self, events: List[pygame.event.Event]) -> None:
-        """处理游戏进行中/暂停的事件：方向键移动、P 暂停/继续、S 切皮肤、M 回菜单。"""
+        """处理游戏进行中/暂停的事件：方向键移动、P 暂停、V 设置、S 切皮肤、M 回菜单。"""
         for event in events:
             if event.type == pygame.KEYDOWN:
                 direction = KEY_DIRECTION_MAP.get(event.key)
@@ -293,6 +308,9 @@ class Application:
                 elif event.key == pygame.K_p:
                     # P 键切换暂停 / 继续（暂停期间蛇与食物都不更新）
                     self.game.toggle_pause()
+                elif event.key == pygame.K_v:
+                    # V 键就地打开设置面板：调整即时生效，关掉后继续这一局
+                    self._open_settings()
                 elif event.key == pygame.K_s:
                     # S 键循环切换皮肤：换肤立即生效并同步菜单标签
                     self.menu_logic.set_skin(self.skin_manager.next().name)
@@ -355,7 +373,13 @@ class Application:
             )
         elif state == GameState.SETTINGS:
             if self.settings_panel is not None:
-                self.menu.draw_settings_panel(self.settings_panel, self.skin_manager)
+                # 游戏内打开：先画冻结的战场，再压暗叠加面板，保留局势参照
+                from_game = self.game.settings_from_game
+                if from_game:
+                    self._render_playfield()
+                self.menu.draw_settings_panel(
+                    self.settings_panel, self.skin_manager, translucent=from_game
+                )
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._render_playfield()
             if state == GameState.PAUSED:

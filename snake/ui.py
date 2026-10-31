@@ -762,13 +762,21 @@ class MenuRenderer:
             rects.append(rect)
         return rects
 
-    def draw_settings_panel(self, panel: "SettingsPanel", skin_manager=None) -> None:
+    def draw_settings_panel(
+        self, panel: "SettingsPanel", skin_manager=None, translucent: bool = False
+    ) -> None:
         """绘制设置面板：音量滑条、难度选择、皮肤选择与暂停键说明。
 
         skin_manager 传入时按当前皮肤实时换肤（背景渐变与标题配色）。
+        translucent=True 用于"游戏中按 V 打开设置"：不再覆盖整屏渐变，
+        而是把面板压在压暗后的战场之上，让玩家仍能看见当前局面。
         """
         skin = skin_manager.current if skin_manager is not None else None
-        self.screen.surface.blit(self._ensure_gradient(skin), (0, 0))
+        if translucent:
+            # 压暗冻结的战场，面板本身仍是实心底色，保证文字可读
+            draw_dim_overlay(self.screen.surface, 190)
+        else:
+            self.screen.surface.blit(self._ensure_gradient(skin), (0, 0))
         w, h = self.screen.config.window_width, self.screen.config.window_height
         fonts = self.screen.fonts
 
@@ -806,14 +814,19 @@ class MenuRenderer:
         # 暂停键说明（固定文字，无需导航）
         hint_y = rects[-1].bottom + 34
         self.screen.draw_text(
-            "暂停键说明: 游戏中按 P 暂停 / 继续，按 ESC 返回开始菜单",
+            "暂停键说明: 游戏中按 P 暂停 / 继续，按 V 打开设置",
             (w // 2, hint_y),
             18,
             Palette.TEXT_DIM,
             center=True,
         )
+        footer = (
+            "←/→ 调整数值 · 回车 保存 · ESC 返回游戏"
+            if translucent
+            else "←/→ 调整数值 · 回车 保存 · ESC 返回"
+        )
         self.screen.draw_text(
-            "←/→ 调整数值 · 回车 保存 · ESC 返回",
+            footer,
             (w // 2, h - 36),
             16,
             Palette.TEXT_DIM,

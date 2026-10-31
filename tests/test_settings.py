@@ -141,12 +141,22 @@ class TestSettingsStateFlow:
         assert app.game.state == GameState.MENU
         assert app.settings_panel is None
 
-        # 游戏进行中无法进入设置（enter_settings 仅在菜单态有效）
+        # 游戏进行中按 V 直接打开设置（面板浮在冻结的战场上）
         app.menu_logic.selected_index = 0
         app.menu_logic.handle_key("confirm")  # 开始游戏
         assert app.game.state == GameState.PLAYING
-        assert app.game.enter_settings() is False
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_v))
+        app.process_events()
+        assert app.game.state == GameState.SETTINGS
+        assert app.settings_panel is not None
+        assert app.game.settings_from_game is True
+
+        # ESC 返回：回到"进行中"而不是菜单，本局继续
+        pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
+        app.process_events()
         assert app.game.state == GameState.PLAYING
+        assert app.settings_panel is None
+        assert app.game.snake is not None  # 蛇还在，本局没被丢弃
 
     def test_settings_adjust_and_save_applies(self, tmp_path, monkeypatch) -> None:
         """面板中调整音量/难度/皮肤后回车保存，设置真正生效；ESC 则放弃。"""

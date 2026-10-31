@@ -282,14 +282,23 @@ class Application:
         self.game.apply_difficulty(difficulty)
 
     def _on_skin_change(self, skin_name: str) -> None:
-        """皮肤切换回调：更新 SkinManager 并重建窗口背景配色。
+        """皮肤切换回调：更新 SkinManager、重建背景配色并持久化。
 
         背景与蛇/食物颜色都变了，增量渲染的帧快照随即失效，
         下一帧强制整屏重绘一次，避免按旧配色比对脏区。
+        此前只有设置面板回车保存才会写盘，游戏中按 S 或菜单里
+        ←/→ 换的皮肤重启后会被旧值覆盖（皮肤残留 bug），现在
+        任何通路的换肤都会即时写入 settings.json。
         """
         self.skin_manager.set_current(skin_name)
         self.screen.apply_skin(self.skin_manager.current)
         self.play_renderer.invalidate()
+        self._persist_skin(skin_name)
+
+    def _persist_skin(self, skin_name: str) -> None:
+        """把当前皮肤写入 settings.json（写盘失败仅记日志，不影响游戏）。"""
+        if not self.settings.update(skin=skin_name):
+            setup_logging().error("皮肤保存失败，本次更换仅在当前运行内生效")
 
     # -- 事件 ---------------------------------------------------------------
 

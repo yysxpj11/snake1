@@ -25,7 +25,7 @@ from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import pygame
 
-from .ui import GameRenderer
+from .ui import GameRenderer, HUD
 
 # 格子坐标
 Cell = Tuple[int, int]
@@ -75,8 +75,12 @@ def merge_rects(rects: Sequence[pygame.Rect], limit: int = 64) -> List[pygame.Re
 class PlayfieldRenderer:
     """游戏战场的增量渲染器：只重绘上一帧与这一帧不同的格子。
 
+    顶栏 HUD（得分/最高分/长度/时间）也由本渲染器负责：
+    通过内容签名判断顶栏是否变化，变了才重绘顶栏条带。
+
     Attributes:
         game_renderer: 复用的 GameRenderer（负责具体绘制与配色）。
+        hud: 顶部信息栏（游戏中显示当前得分，修复"分数不可见"问题）。
         last_dirty: 最近一帧提交的脏矩形（整屏重绘时是整屏矩形），调试用。
     """
 
@@ -85,14 +89,17 @@ class PlayfieldRenderer:
         self.screen = screen
         self.skin_manager = skin_manager
         self.game_renderer = GameRenderer(screen, skin_manager)
+        self.hud = HUD(screen, 0)
         self._snapshot: Dict[Cell, Signature] = {}
         self._speed_active = False
+        self._hud_sig: Optional[tuple] = None
         self.last_dirty: List[pygame.Rect] = []
 
     def invalidate(self) -> None:
         """丢弃帧快照，下一帧强制整屏重绘（换皮肤、状态切换、窗口重建时用）。"""
         self._snapshot.clear()
         self._speed_active = False
+        self._hud_sig = None
         self.last_dirty = []
 
     # -- 对外入口 -----------------------------------------------------------
@@ -110,31 +117,67 @@ class PlayfieldRenderer:
         """
         snapshot = self._build_snapshot(game)
         speed_active = game.speed_effect_ratio() > 0
+        hud_sig = self._hud_signature(game)
+        hud_dirty = hud_sig != self._hud_sig
         need_full = force_full or not self._snapshot or speed_active or self._speed_active
 
         if need_full:
             self._draw_full(game, speed_active)
             self._snapshot = snapshot
             self._speed_active = speed_active
+            self._hud_sig = hud_sig
             self.last_dirty = [self.screen.rect]
             return None
 
         cells = self._diff_cells(snapshot)
-        self._snapshot = snapshot
-        if not cells:
+        if cells and any(
+            self.screen.cell_rect(cell).colliderect(self.hud.rect) for cell in cells
+        ):
+            # 顶栏覆盖区内的格子被重绘时，半透明顶栏会被网格背景擦掉，
+            # 因此必须把整条顶栏连同其覆盖的战场格子一起重画
+            hud_dirty = True
+        if hud_dirty:
+            # 顶栏内容变了：顶栏覆盖到的战场格子一并重画，
+            # 否则半透明顶栏下面会残留旧帧的蛇身/食物
+            hud_rect = self.hud.rect
+            cells |= {
+                cell
+                for cell in set(snapshot) | set(self._snapshot)
+                if self.screen.cell_rect(cell).colliderect(hud_rect)
+            }
+        if not cells and not hud_dirty:
             # 这一帧内容与上一帧完全一致：不画、不提交
             self.last_dirty = []
             return []
 
         for cell in cells:
             self.screen.restore_background(self.screen.cell_rect(cell))
+        if hud_dirty:
+            self.screen.restore_background(self.hud.rect)
         self._draw_cells(game, cells)
+        if hud_dirty:
+            self.hud.draw(game.score, self._snake_length(game), game.stats.elapsed)
 
-        dirty = merge_rects([self.screen.cell_rect(cell) for cell in cells])
+        rects = [self.screen.cell_rect(cell) for cell in cells]
+        if hud_dirty:
+            rects.append(self.hud.rect)
+        dirty = merge_rects(rects)
+        self._snapshot = snapshot
+        self._hud_sig = hud_sig
         self.last_dirty = dirty
         return dirty
 
     # -- 快照与差异 ---------------------------------------------------------
+
+    @staticmethod
+    def _snake_length(game) -> int:
+        """当前蛇长（无蛇时为 0）。"""
+        return game.snake.length if game.snake is not None else 0
+
+    def _hud_signature(self, game) -> tuple:
+        """构建顶栏内容签名：分数 / 最高分 / 长度 / 整秒时间变化都会让它改变。"""
+        self.hud.best_score = game.best_score
+        return self.hud.signature(game.score, self._snake_length(game), game.stats.elapsed)
 
     def _build_snapshot(self, game) -> Dict[Cell, Signature]:
         """构建这一帧每个有内容格子的签名（颜色 + 闪烁相位）。"""
@@ -177,11 +220,12 @@ class PlayfieldRenderer:
     # -- 绘制 ---------------------------------------------------------------
 
     def _draw_full(self, game, speed_active: bool) -> None:
-        """整屏重绘：背景 + 食物 + 蛇 +（可选）加速光晕。"""
+        """整屏重绘：背景 + 食物 + 蛇 + 顶栏 HUD +（可选）加速光晕。"""
         self.screen.draw_background()
         self.game_renderer.draw_playfield(
             game, game.speed_effect_ratio() if speed_active else 0.0
         )
+        self.hud.draw(game.score, self._snake_length(game), game.stats.elapsed)
 
     def _draw_cells(self, game, cells: Set[Cell]) -> None:
         """只绘制落在脏格子里的蛇节与食物（其余格子沿用后缓冲内容）。"""

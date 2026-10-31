@@ -408,10 +408,16 @@ class HUD(Renderer):
                 self.message = ""
 
     def draw(self, score: int, length: int, elapsed: float) -> None:
-        """绘制整条 HUD。"""
+        """绘制整条 HUD。
+
+        顶栏用半透明遮罩而不是实心底色：蛇游进顶部两行时
+        仍能隐约看到，不会被整块面板挡住。
+        """
         bar = self.rect
         width = bar.width
-        pygame.draw.rect(self.surface, Palette.PANEL_BG, bar)
+        overlay = pygame.Surface(bar.size, pygame.SRCALPHA)
+        overlay.fill(Palette.OVERLAY)
+        self.surface.blit(overlay, bar.topleft)
         pygame.draw.line(
             self.surface, Palette.PANEL_BORDER,
             (0, HUD_HEIGHT), (width, HUD_HEIGHT),

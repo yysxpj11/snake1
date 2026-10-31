@@ -19,7 +19,6 @@ import json
 import logging
 import os
 import random
-import sys
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -479,16 +478,14 @@ class HighScoreStore:
 
 
 def setup_logging(level: int = logging.INFO) -> logging.Logger:
-    """初始化根日志配置并返回游戏专用 logger。"""
-    logger = logging.getLogger("snake_game")
-    if not logger.handlers:
-        handler = logging.StreamHandler(sys.stdout)
-        handler.setFormatter(
-            logging.Formatter("[%(asctime)s] %(levelname)s %(name)s: %(message)s")
-        )
-        logger.addHandler(handler)
-    logger.setLevel(level)
-    return logger
+    """初始化游戏日志（控制台 + game.log 双输出）并返回游戏专用 logger。
+
+    具体配置交给 LogManager：包级 logger "snake" 会接住 snake.* 各模块的日志，
+    这里只做兼容转发，并保证整个进程复用同一个实例（重复调用不会重复挂 handler）。
+    """
+    from .logmanager import LogManager
+
+    return LogManager.get_default(console_level=level).logger
 
 
 class Timer:

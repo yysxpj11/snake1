@@ -10,3 +10,7 @@ highscore.json
 .DS_Store
 .settings_*.tmp
 settings.json
+
+# 运行期日志
+game.log
+*.log.*

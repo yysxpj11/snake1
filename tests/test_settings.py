@@ -148,12 +148,14 @@ class TestSettingsStateFlow:
         assert app.game.enter_settings() is False
         assert app.game.state == GameState.PLAYING
 
-    def test_settings_adjust_and_save_applies(self) -> None:
+    def test_settings_adjust_and_save_applies(self, tmp_path, monkeypatch) -> None:
         """面板中调整音量/难度/皮肤后回车保存，设置真正生效；ESC 则放弃。"""
-        pygame.init()
+        import pygame
         from snake.main import Application, build_config, parse_args
         from snake.skin import SKIN_NEON
 
+        monkeypatch.chdir(tmp_path)  # 隔离：保存会写 settings.json，不污染项目根目录
+        pygame.init()
         app = Application(build_config(parse_args(["--width", "400", "--height", "400"])))
         settings_index = [a for _t, a in app.menu_logic.items].index("settings")
         app.menu_logic.selected_index = settings_index

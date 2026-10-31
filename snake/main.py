@@ -21,6 +21,7 @@ import pygame
 from .food import FoodType
 from .game import Game, GameState
 from .highscore import HighScoreManager
+from .settings import SettingsManager
 from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
@@ -95,11 +96,18 @@ class Application:
     def __init__(self, config: Config, seed: Optional[int] = None) -> None:
         """初始化窗口、菜单与游戏对象；启动后先显示开始菜单。"""
         self.config = config
+        # 设置持久化：启动时自动加载上次保存的音量/难度/皮肤，
+        # 必须在创建 SoundManager / Game / Menu 之前应用，
+        # 这样音量、得分倍率与菜单标签都能直接取到恢复后的值。
+        self.settings = SettingsManager()
+        self._apply_saved_settings()
         self.screen = Screen(config)
         # 本地高分榜：独立 highscore.json，成绩自动落盘
         self.store = HighScoreManager()
-        # 皮肤管理：默认经典绿，同步到窗口背景
+        # 皮肤管理：默认经典绿；有上次保存的皮肤时恢复（名称无效则保持默认）
         self.skin_manager = SkinManager()
+        if self.settings.loaded and self.settings.skin:
+            self.skin_manager.set_current(self.settings.skin)
         self.screen.apply_skin(self.skin_manager.current)
         # 音效管理：读取设置中的开关与音量，合成全部内置音效
         self.sound = SoundManager(config=config)
@@ -130,6 +138,17 @@ class Application:
         # 设置面板：进入设置状态时创建，保存/返回后置空
         self.settings_panel: Optional[SettingsPanel] = None
 
+    def _apply_saved_settings(self) -> None:
+        """把上次保存的设置写回 Config（未保存过或单项非法时保持默认）。
+
+        音量与难度写入 config 后，SoundManager / Game 构造时即可取到；
+        皮肤在 SkinManager 创建后单独恢复（见 __init__）。
+        """
+        if not self.settings.loaded:
+            return
+        self.config.sound_volume = self.settings.sound_volume
+        self.config.difficulty = Difficulty.from_name(self.settings.difficulty)
+
     def _on_menu_select(self, action: str) -> None:
         """菜单确认回调：根据动作名执行开始游戏 / 退出。
 
@@ -157,11 +176,13 @@ class Application:
             )
 
     def _on_settings_save(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
-        """回车保存：把面板暂存值应用到各组件并返回菜单。"""
+        """回车保存：把面板暂存值应用到各组件并持久化到 settings.json。"""
         self.sound.set_volume(volume)
         self.config.sound_volume = volume
         self.menu_logic.set_difficulty(difficulty, notify=True)
         self.menu_logic.set_skin(skin_name, notify=True)
+        # 持久化：下次启动自动恢复这三项设置
+        self.settings.update(volume=volume, difficulty=difficulty.value, skin=skin_name)
         self._close_settings("设置已保存")
 
     def _on_settings_cancel(self) -> None:

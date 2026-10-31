@@ -8,3 +8,5 @@ highscores.json
 highscore.json
 .highscore_*.tmp
 .DS_Store
+.settings_*.tmp
+settings.json

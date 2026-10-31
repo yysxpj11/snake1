@@ -19,7 +19,19 @@ from typing import Dict, List, Optional, Tuple
 from .food import Food, FoodManager, FoodType
 from .snake import Direction, Snake, WallMode
 from .sound import SoundManager
-from .utils import Config, Difficulty, HighScoreStore, Timer, clamp
+from .config import (
+    COMBO_BONUS_RATIO,
+    COMBO_MAX_COUNT,
+    COMBO_WINDOW,
+    Config,
+    Difficulty,
+    MAX_LEVEL_LENGTH_BONUS,
+    MIN_MOVE_INTERVAL,
+    LEVEL_SPEEDUP_STEP,
+    SNAKE_START_LENGTH,
+    SPEED_BOOST_DIVISOR,
+)
+from .utils import HighScoreStore, Timer, clamp
 
 # 模块级 logger：包级 logger "snake" 已由 LogManager 配好控制台 + game.log 双输出，
 # 这里只需 __name__ 命名，日志会自动冒泡上去（无需传 logger 参数）
@@ -37,10 +49,10 @@ class GameState(Enum):
 
 
 class ScoreManager:
-    """负责得分累加、连击奖励与分数上限保护。"""
+    """负责得分累加、连击奖励与分数上限保护。
 
-    COMBO_WINDOW = 3.0  # 连击判定窗口（秒）
-    COMBO_BONUS_RATIO = 0.5  # 连击加成比例
+    连击窗口与加成比例等参数集中在 snake.config。
+    """
 
     def __init__(self, multiplier: float = 1.0) -> None:
         """初始化分数、连击状态与难度倍率。"""
@@ -62,10 +74,10 @@ class ScoreManager:
         now_bonus = 0
         if self.combo_timer is not None and not self.combo_timer.finished:
             self.combo_count += 1
-            now_bonus = int(base_score * self.COMBO_BONUS_RATIO * min(self.combo_count, 5))
+            now_bonus = int(base_score * COMBO_BONUS_RATIO * min(self.combo_count, COMBO_MAX_COUNT))
         else:
             self.combo_count = 1
-        self.combo_timer = Timer(self.COMBO_WINDOW)
+        self.combo_timer = Timer(COMBO_WINDOW)
         gained = int((base_score + now_bonus) * self.multiplier)
         self.score += gained
         self.earned_history.append(gained)
@@ -132,9 +144,10 @@ class GameStats:
 
 
 class Game:
-    """游戏主控制器：持有全部实体并驱动状态机。"""
+    """游戏主控制器：持有全部实体并驱动状态机。
 
-    SPEED_BOOST_DIVISOR = 0.6  # 加速期间移动间隔缩短为 60%
+    速度与得分参数全部来自 snake.config，本类不写魔法数字。
+    """
 
     def __init__(
         self,
@@ -169,7 +182,7 @@ class Game:
         self.wall_mode = wall_mode
         self.snake = Snake(
             start=(self.config.grid_columns // 2, self.config.grid_rows // 2),
-            length=3 + min(level - 1, 5),
+            length=SNAKE_START_LENGTH + min(level - 1, MAX_LEVEL_LENGTH_BONUS),
             direction="right",
             wall_mode=wall_mode,
         )
@@ -312,9 +325,9 @@ class Game:
         """
         # 从难度设置读取基础移动间隔，不再使用硬编码倍率
         interval = self.config.move_interval_for_difficulty
-        interval = max(0.05, interval - (self.level - 1) * 0.005)
+        interval = max(MIN_MOVE_INTERVAL, interval - (self.level - 1) * LEVEL_SPEEDUP_STEP)
         if self.speed_timer is not None and not self.speed_timer.finished:
-            interval *= self.SPEED_BOOST_DIVISOR
+            interval *= SPEED_BOOST_DIVISOR
         return interval
 
     def _move_accumulator(self) -> float:

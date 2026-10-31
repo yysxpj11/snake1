@@ -2,7 +2,8 @@
 """贪吃蛇游戏包。
 
 模块划分：
-- utils: 常量、配置、调色板、网格工具、高分存储
+- config: 全局常量与配置（窗口/得分/难度/调色板/界面布局）
+- utils: 网格工具、高分存储、计时器（常量已集中到 config，此处兼容再导出）
 - snake: 蛇实体与移动/碰撞逻辑
 - food:  食物实体与生成管理
 - game:  状态机与核心逻辑
@@ -20,7 +21,7 @@
 
 __version__ = "1.0.0"
 __all__ = [
-    "utils", "snake", "food", "game", "effects",
+    "config", "utils", "snake", "food", "game", "effects",
     "skin", "highscore", "settings", "sound", "fps", "render",
     "logmanager", "ui", "main",
 ]

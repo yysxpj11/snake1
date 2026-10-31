@@ -18,7 +18,12 @@ from typing import List, Optional, Tuple
 
 import pygame
 
-from .food import FoodType
+from .config import (
+    CLEAR_HOLD_SECONDS,
+    Config,
+    Difficulty,
+    NOTICE_DURATION,
+)
 from .fps import MAX_FPS, FrameRateController
 from .game import Game, GameState
 from .highscore import HighScoreManager
@@ -26,13 +31,9 @@ from .settings import SettingsManager
 from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
-from .utils import Config, Difficulty, clamp, setup_logging
+from .utils import clamp, setup_logging
 from .render import PlayfieldRenderer
 from .ui import Menu, MenuRenderer, Screen, SettingsPanel
-
-
-# 长按 C 键清除最高分所需的按住时长（秒）
-CLEAR_HOLD_SECONDS = 1.0
 
 
 # 方向键映射表：pygame 键码 -> Direction
@@ -274,7 +275,7 @@ class Application:
             self.game.back_to_menu()
         if notice:
             self.notice = notice
-            self.notice_timer = 3.0
+            self.notice_timer = NOTICE_DURATION
 
     def _on_difficulty_change(self, difficulty: Difficulty) -> None:
         """难度切换回调：交给 Game.apply_difficulty 立即改变速度与得分倍率。"""
@@ -346,7 +347,7 @@ class Application:
             self._clear_done = True
             self.store.clear()
             self.notice = "最高分记录已清除"
-            self.notice_timer = 3.0
+            self.notice_timer = NOTICE_DURATION
             logger = setup_logging()
             logger.info("最高分记录已清除")
 

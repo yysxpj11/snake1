@@ -17,7 +17,8 @@ import logging
 import math
 from typing import Dict, Optional, Tuple
 
-from .utils import Config, clamp
+from .config import Config
+from .utils import clamp
 
 logger = logging.getLogger(__name__)
 

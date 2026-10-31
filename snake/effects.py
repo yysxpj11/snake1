@@ -18,7 +18,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .utils import Palette, clamp, ease_out_cubic, lerp
+from .config import Palette
+from .utils import clamp, ease_out_cubic, lerp
 
 Vector = Tuple[float, float]
 

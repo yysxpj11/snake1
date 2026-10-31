@@ -179,13 +179,9 @@ class PlayfieldRenderer:
     def _draw_full(self, game, speed_active: bool) -> None:
         """整屏重绘：背景 + 食物 + 蛇 +（可选）加速光晕。"""
         self.screen.draw_background()
-        food_manager = getattr(game, "food_manager", None)
-        if food_manager is not None:
-            self.game_renderer.draw_foods(food_manager.foods)
-        if game.snake is not None:
-            self.game_renderer.draw_snake(game.snake)
-        if speed_active:
-            self.game_renderer.draw_speed_effect(True, game.speed_effect_ratio())
+        self.game_renderer.draw_playfield(
+            game, game.speed_effect_ratio() if speed_active else 0.0
+        )
 
     def _draw_cells(self, game, cells: Set[Cell]) -> None:
         """只绘制落在脏格子里的蛇节与食物（其余格子沿用后缓冲内容）。"""

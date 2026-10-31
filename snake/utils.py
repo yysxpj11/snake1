@@ -2,12 +2,15 @@
 """贪吃蛇游戏工具模块。
 
 本模块提供整个游戏共用的基础能力：
-- 常量与默认配置
-- 配置数据类 Config
-- 调色板 Palette
 - 网格坐标与向量运算
+- 随机与采样工具
+- 数值钳制 / 插值等数学助手
 - 高分记录的持久化存取
 - 简易日志与计时器工具
+
+常量、Config、Difficulty 与 Palette 已集中到 ``snake.config``
+（见本文件底部的再导出），旧代码继续 ``from .utils import Config``
+仍然可用；新代码建议直接从 ``snake.config`` 导入。
 
 所有其他模块都依赖本模块，但本模块不依赖任何游戏逻辑模块，
 以保证依赖方向单一、便于单元测试。
@@ -20,41 +23,32 @@ import logging
 import os
 import random
 import time
-from dataclasses import dataclass, field
-from enum import Enum
 from typing import Dict, List, Optional, Sequence, Tuple
 
 # ---------------------------------------------------------------------------
-# 常量定义
+# 常量再导出（真正的定义在 snake.config，这里保持旧导入路径可用）
 # ---------------------------------------------------------------------------
+from .config import (  # noqa: F401
+    COMBO_BONUS_RATIO,
+    COMBO_MAX_COUNT,
+    COMBO_WINDOW,
+    Config,
+    DEFAULT_CELL_SIZE,
+    DEFAULT_MOVE_INTERVAL,
+    DEFAULT_WINDOW_HEIGHT,
+    DEFAULT_WINDOW_WIDTH,
+    Difficulty,
+    GRID_COLUMNS,
+    GRID_ROWS,
+    HIGHSCORE_FILENAME,
+    Palette,
+    SCORE_PER_FOOD,
+    SCORE_PER_GOLDEN_FOOD,
+    SCORE_PER_SPEED_FOOD,
+    SPECIAL_FOOD_LIFETIME,
+    TARGET_FPS,
+)
 
-# 默认窗口尺寸（像素）
-DEFAULT_WINDOW_WIDTH: int = 800
-DEFAULT_WINDOW_HEIGHT: int = 600
-
-# 单个网格单元的边长（像素）
-DEFAULT_CELL_SIZE: int = 20
-
-# 网格列数与行数（根据窗口与单元尺寸推算）
-GRID_COLUMNS: int = DEFAULT_WINDOW_WIDTH // DEFAULT_CELL_SIZE
-GRID_ROWS: int = DEFAULT_WINDOW_HEIGHT // DEFAULT_CELL_SIZE
-
-# 目标帧率
-TARGET_FPS: int = 60
-
-# 蛇每几帧移动一格（数值越大蛇越慢）
-DEFAULT_MOVE_INTERVAL: float = 0.12  # 秒
-
-# 分数规则
-SCORE_PER_FOOD: int = 10
-SCORE_PER_GOLDEN_FOOD: int = 50
-SCORE_PER_SPEED_FOOD: int = 20
-
-# 特殊食物存在时间（秒）
-SPECIAL_FOOD_LIFETIME: float = 8.0
-
-# 高分文件名
-HIGHSCORE_FILENAME: str = "highscores.json"
 
 # 方向向量：(dx, dy)，屏幕坐标 y 向下
 DIRECTION_VECTORS: Dict[str, Tuple[int, int]] = {
@@ -71,211 +65,6 @@ OPPOSITE_DIRECTIONS: Dict[str, str] = {
     "left": "right",
     "right": "left",
 }
-
-
-# ---------------------------------------------------------------------------
-# 难度枚举与配置数据类
-# ---------------------------------------------------------------------------
-
-# 各难度档位的参数表（集中存放，便于统一调整；
-# 注意不能写在 Enum 类体内，否则会被当作枚举成员）
-DIFFICULTY_MOVE_INTERVALS: Dict[str, float] = {
-    "easy": 0.16,    # 慢速：每格 0.16 秒
-    "normal": 0.12,  # 中速
-    "hard": 0.085,   # 快速
-}
-
-DIFFICULTY_SCORE_MULTIPLIERS: Dict[str, float] = {
-    "easy": 0.8,
-    "normal": 1.0,
-    "hard": 1.5,
-}
-
-DIFFICULTY_LABELS: Dict[str, str] = {
-    "easy": "简单",
-    "normal": "普通",
-    "hard": "困难",
-}
-
-
-class Difficulty(Enum):
-    """难度档位枚举。
-
-    每个档位自带速度与得分参数，游戏逻辑只读枚举属性，
-    不再硬编码任何数值：
-    - EASY:   慢速（0.16 秒/格），得分倍率 0.8
-    - NORMAL: 中速（0.12 秒/格），得分倍率 1.0
-    - HARD:   快速（0.085 秒/格），得分倍率 1.5
-    """
-
-    EASY = "easy"
-    NORMAL = "normal"
-    HARD = "hard"
-
-    @property
-    def label(self) -> str:
-        """返回中文显示名（简单 / 普通 / 困难）。"""
-        return DIFFICULTY_LABELS[self.value]
-
-    @property
-    def move_interval(self) -> float:
-        """蛇每移动一格所需的秒数，数值越小蛇越快。"""
-        return DIFFICULTY_MOVE_INTERVALS[self.value]
-
-    @property
-    def score_multiplier(self) -> float:
-        """该难度下的得分倍率。"""
-        return DIFFICULTY_SCORE_MULTIPLIERS[self.value]
-
-    @property
-    def speed_factor(self) -> float:
-        """相对普通档的速度倍率（1.0 为基准，小于 1 表示更快）。"""
-        return self.move_interval / DIFFICULTY_MOVE_INTERVALS[Difficulty.NORMAL.value]
-
-    def next(self) -> "Difficulty":
-        """返回下一档难度（困难之后回到简单）。"""
-        order = Difficulty.levels()
-        return order[(order.index(self) + 1) % len(order)]
-
-    def previous(self) -> "Difficulty":
-        """返回上一档难度（简单之前回到困难）。"""
-        order = Difficulty.levels()
-        return order[(order.index(self) - 1) % len(order)]
-
-    @classmethod
-    def levels(cls) -> List["Difficulty"]:
-        """按由慢到快返回全部难度档位。"""
-        return [cls.EASY, cls.NORMAL, cls.HARD]
-
-    @classmethod
-    def from_name(cls, name: str) -> "Difficulty":
-        """根据名称（不区分大小写）构造难度，无效名称回退到普通。"""
-        try:
-            return cls(str(name).strip().lower())
-        except (ValueError, AttributeError):
-            return cls.NORMAL
-
-
-@dataclass
-class Config:
-    """游戏全局配置。
-
-    Attributes:
-        window_width: 窗口宽度（像素）。
-        window_height: 窗口高度（像素）。
-        cell_size: 单个网格单元的边长（像素）。
-        fps: 目标帧率。
-        move_interval: 基础移动间隔秒数（难度会覆盖此值）。
-        score_per_food: 普通食物得分。
-        sound_enabled: 是否开启音效。
-        sound_volume: 音效主音量（0.0 - 1.0），供设置界面预留。
-        fullscreen: 是否全屏运行。
-        difficulty: 难度档位枚举（easy / normal / hard）。
-        max_score_history: 高分榜最多保存条数。
-    """
-
-    window_width: int = DEFAULT_WINDOW_WIDTH
-    window_height: int = DEFAULT_WINDOW_HEIGHT
-    cell_size: int = DEFAULT_CELL_SIZE
-    fps: int = TARGET_FPS
-    move_interval: float = DEFAULT_MOVE_INTERVAL
-    score_per_food: int = SCORE_PER_FOOD
-    sound_enabled: bool = True
-    sound_volume: float = 0.7
-    fullscreen: bool = False
-    difficulty: Difficulty = Difficulty.NORMAL
-    max_score_history: int = 10
-
-    @property
-    def grid_columns(self) -> int:
-        """返回网格列数。"""
-        return self.window_width // self.cell_size
-
-    @property
-    def grid_rows(self) -> int:
-        """返回网格行数。"""
-        return self.window_height // self.cell_size
-
-    def difficulty_multiplier(self) -> float:
-        """返回当前难度对应的得分倍率。"""
-        return self.difficulty.score_multiplier
-
-    def speed_factor(self) -> float:
-        """返回当前难度相对普通档的速度倍率（小于 1 表示更快）。"""
-        return self.difficulty.speed_factor
-
-    @property
-    def move_interval_for_difficulty(self) -> float:
-        """返回当前难度对应的移动间隔（秒/格），供游戏逻辑直接读取。"""
-        return self.difficulty.move_interval
-
-    def clamp_to_window(self) -> None:
-        """保证窗口尺寸是单元尺寸的整数倍，避免网格溢出。"""
-        self.window_width = max(
-            self.cell_size * 10,
-            (self.window_width // self.cell_size) * self.cell_size,
-        )
-        self.window_height = max(
-            self.cell_size * 10,
-            (self.window_height // self.cell_size) * self.cell_size,
-        )
-
-
-# ---------------------------------------------------------------------------
-# 调色板
-# ---------------------------------------------------------------------------
-
-
-class Palette:
-    """游戏配色方案，集中管理所有 RGB 颜色。"""
-
-    BACKGROUND = (18, 18, 24)
-    GRID_LINE = (30, 30, 40)
-    SNAKE_HEAD = (80, 220, 120)
-    SNAKE_BODY = (60, 180, 100)
-    SNAKE_TAIL = (40, 140, 80)
-    FOOD_NORMAL = (230, 80, 80)
-    FOOD_GOLDEN = (240, 200, 60)
-    FOOD_SPEED = (80, 160, 240)
-    TEXT_PRIMARY = (235, 235, 235)
-    TEXT_DIM = (150, 150, 160)
-    PANEL_BG = (28, 28, 38)
-    PANEL_BORDER = (70, 70, 90)
-    BUTTON_BG = (60, 60, 80)
-    BUTTON_HOVER = (90, 90, 120)
-    OVERLAY = (0, 0, 0, 160)
-    DANGER = (220, 60, 60)
-    SUCCESS = (90, 200, 90)
-
-    @classmethod
-    def all_colors(cls) -> Dict[str, Tuple[int, int, int]]:
-        """返回类属性中定义的全部颜色字典，便于调试与主题切换。"""
-        result: Dict[str, Tuple[int, int, int]] = {}
-        for name in dir(cls):
-            if name.startswith("_"):
-                continue
-            value = getattr(cls, name)
-            if isinstance(value, tuple) and len(value) in (3, 4):
-                result[name] = value
-        return result
-
-    @classmethod
-    def lighten(cls, color: Tuple[int, int, int], amount: float = 0.2) -> Tuple[int, int, int]:
-        """把颜色变亮 amount（0~1）。"""
-        r, g, b = color[:3]
-        r = min(255, int(r + (255 - r) * amount))
-        g = min(255, int(g + (255 - g) * amount))
-        b = min(255, int(b + (255 - b) * amount))
-        return (r, g, b)
-
-    @classmethod
-    def darken(cls, color: Tuple[int, int, int], amount: float = 0.2) -> Tuple[int, int, int]:
-        """把颜色变暗 amount（0~1）。"""
-        r, g, b = color[:3]
-        r = max(0, int(r * (1 - amount)))
-        g = max(0, int(g * (1 - amount)))
-        b = max(0, int(b * (1 - amount)))
-        return (r, g, b)
 
 
 # ---------------------------------------------------------------------------
@@ -532,26 +321,6 @@ class Timer:
     def stop(self) -> None:
         """手动停止计时器。"""
         self.running = False
-
-
-class FrameClock:
-    """帧率控制器封装，记录帧间隔供逻辑层使用。"""
-
-    def __init__(self, fps: int) -> None:
-        """按目标帧率初始化（实际 tick 依赖 pygame.time.Clock）。"""
-        self.target_fps = fps
-        self.last_tick = time.perf_counter()
-        self.dt = 0.0
-
-    def tick_with(self, clock: "object" = None) -> float:
-        """与 pygame Clock 联动推进一帧并返回帧间隔秒数。"""
-        if clock is not None:
-            self.dt = clock.tick(self.target_fps) / 1000.0
-        else:
-            now = time.perf_counter()
-            self.dt = now - self.last_tick
-            self.last_tick = now
-        return self.dt
 
 
 def format_time(seconds: float) -> str:

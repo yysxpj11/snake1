@@ -16,11 +16,13 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional, Sequence, Tuple
 
-from .utils import (
-    SPECIAL_FOOD_LIFETIME,
+from .config import (
     SCORE_PER_FOOD,
     SCORE_PER_GOLDEN_FOOD,
     SCORE_PER_SPEED_FOOD,
+    SPECIAL_FOOD_LIFETIME,
+)
+from .utils import (
     Timer,
     manhattan_distance,
     random_choice_weighted,

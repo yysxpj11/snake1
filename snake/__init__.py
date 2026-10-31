@@ -12,6 +12,7 @@
 - settings: 音量/难度/皮肤设置持久化
 - sound:  音效管理（内置波形合成，无外部素材）
 - fps:    帧率控制（锁定 60FPS、步长裁剪、帧率统计）
+- render: 战场增量渲染（只重绘变化的格子）
 - ui:    渲染与控件（依赖 pygame）
 - main:  程序入口
 """
@@ -19,5 +20,5 @@
 __version__ = "1.0.0"
 __all__ = [
     "utils", "snake", "food", "game", "effects",
-    "skin", "highscore", "settings", "sound", "fps", "ui", "main",
+    "skin", "highscore", "settings", "sound", "fps", "render", "ui", "main",
 ]

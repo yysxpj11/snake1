@@ -299,27 +299,40 @@ class GameRenderer:
 
     # -- 蛇 -----------------------------------------------------------------
 
-    def draw_snake(self, snake: Snake) -> None:
-        """绘制整条蛇：头、身、尾使用不同颜色（优先取当前皮肤配色）。"""
+    def segment_color(self, index: int, length: int, segment) -> Tuple[int, int, int]:
+        """返回第 index 节蛇身的颜色（头/身/尾不同，新生节更亮）。
+
+        单独抽出来是为了让增量渲染能"只算颜色、比差异"，
+        而不必先画一遍才知道这一格长什么样。
+        """
         skin = self._skin()
         head_color = skin.snake_head if skin is not None else Palette.SNAKE_HEAD
         body_color = skin.snake_body if skin is not None else Palette.SNAKE_BODY
         tail_color = skin.snake_tail if skin is not None else Palette.SNAKE_TAIL
-        n = snake.length
-        for index, seg in enumerate(snake):
-            rect = self.screen.cell_rect(seg.position)
-            if index == 0:
-                color = head_color
-            elif index == n - 1:
-                color = tail_color
-            else:
-                color = body_color
-            if seg.is_new:
-                color = Palette.lighten(color, 0.35)
-            pygame.draw.rect(self.screen.surface, color, rect, border_radius=4)
-        self._draw_eyes(snake)
+        if index == 0:
+            color = head_color
+        elif index == length - 1:
+            color = tail_color
+        else:
+            color = body_color
+        if segment.is_new:
+            color = Palette.lighten(color, 0.35)
+        return color
 
-    def _draw_eyes(self, snake: Snake) -> None:
+    def draw_segment(self, index: int, length: int, segment) -> None:
+        """绘制一节蛇身（整条绘制与增量绘制共用同一份绘制代码）。"""
+        rect = self.screen.cell_rect(segment.position)
+        color = self.segment_color(index, length, segment)
+        pygame.draw.rect(self.screen.surface, color, rect, border_radius=4)
+
+    def draw_snake(self, snake: Snake) -> None:
+        """绘制整条蛇：头、身、尾使用不同颜色（优先取当前皮肤配色）。"""
+        length = snake.length
+        for index, seg in enumerate(snake):
+            self.draw_segment(index, length, seg)
+        self.draw_eyes(snake)
+
+    def draw_eyes(self, snake: Snake) -> None:
         """在蛇头上绘制两只眼睛，指示朝向。"""
         cs = self.screen.config.cell_size
         hx, hy = snake.head_position
@@ -336,10 +349,9 @@ class GameRenderer:
 
     # -- 食物 ---------------------------------------------------------------
 
-    def draw_food(self, food: Food) -> None:
-        """按类型绘制食物（优先取当前皮肤配色），特殊食物附带剩余时间指示环。"""
+    def food_color(self, food: Food) -> Tuple[int, int, int]:
+        """返回食物颜色（优先取当前皮肤配色），供绘制与增量比对共用。"""
         skin = self._skin()
-        rect = self.screen.cell_rect(food.position)
         if skin is not None:
             color_map = {
                 FoodType.NORMAL: skin.food_normal,
@@ -352,7 +364,12 @@ class GameRenderer:
                 FoodType.GOLDEN: Palette.FOOD_GOLDEN,
                 FoodType.SPEED: Palette.FOOD_SPEED,
             }
-        color = color_map.get(food.ftype, Palette.FOOD_NORMAL)
+        return color_map.get(food.ftype, Palette.FOOD_NORMAL)
+
+    def draw_food(self, food: Food) -> None:
+        """按类型绘制食物（优先取当前皮肤配色），特殊食物附带剩余时间指示环。"""
+        rect = self.screen.cell_rect(food.position)
+        color = self.food_color(food)
         pygame.draw.circle(self.screen.surface, color, rect.center, rect.width // 2 - 1)
         if food.is_special:
             ratio = food.remaining_ratio()

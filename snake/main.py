@@ -27,7 +27,8 @@ from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
 from .utils import Config, Difficulty, clamp, setup_logging
-from .ui import GameRenderer, Menu, MenuRenderer, Screen, SettingsPanel
+from .render import PlayfieldRenderer
+from .ui import Menu, MenuRenderer, Screen, SettingsPanel
 
 
 # 长按 C 键清除最高分所需的按住时长（秒）
@@ -130,6 +131,9 @@ class Application:
             on_skin_change=self._on_skin_change,
         )
         self.menu = MenuRenderer(self.screen)
+        # 战场增量渲染器：复用 GameRenderer，只重绘内容变化的格子
+        self.play_renderer = PlayfieldRenderer(self.screen, self.skin_manager)
+        self._rendered_state: Optional[GameState] = None
         # 预创建一局数据后立即回到菜单状态，保证启动第一屏是开始菜单
         self.game.new_game(wall_mode=WallMode.WRAP if config.fullscreen else WallMode.SOLID)
         self.game.back_to_menu()
@@ -272,9 +276,14 @@ class Application:
         self.game.apply_difficulty(difficulty)
 
     def _on_skin_change(self, skin_name: str) -> None:
-        """皮肤切换回调：更新 SkinManager 并重建窗口背景配色。"""
+        """皮肤切换回调：更新 SkinManager 并重建窗口背景配色。
+
+        背景与蛇/食物颜色都变了，增量渲染的帧快照随即失效，
+        下一帧强制整屏重绘一次，避免按旧配色比对脏区。
+        """
         self.skin_manager.set_current(skin_name)
         self.screen.apply_skin(self.skin_manager.current)
+        self.play_renderer.invalidate()
 
     # -- 事件 ---------------------------------------------------------------
 
@@ -455,12 +464,21 @@ class Application:
             self.move_accumulator = self.game.step(dt, self.move_accumulator)
 
     def render(self) -> None:
-        """按状态渲染当前画面。"""
+        """按状态渲染当前画面。
+
+        进行中走增量渲染：只把变了的格子画进后缓冲并局部提交；
+        菜单、设置、暂停、结束这些整屏界面走整屏重绘 + 整屏提交。
+        状态切换时先让增量缓存失效，避免脏区判断基于上一屏的残留内容。
+        """
         state = self.game.state
+        if state != self._rendered_state:
+            self.play_renderer.invalidate()
+            self._rendered_state = state
         if state == GameState.MENU:
             self.menu.draw_main_menu(
                 self.game.best_score, self.menu_logic, self.skin_manager, self.notice
             )
+            self.screen.present()
         elif state == GameState.SETTINGS:
             if self.settings_panel is not None:
                 # 游戏内打开：先画冻结的战场，再压暗叠加面板，保留局势参照
@@ -470,10 +488,16 @@ class Application:
                 self.menu.draw_settings_panel(
                     self.settings_panel, self.skin_manager, translucent=from_game
                 )
-        elif state in (GameState.PLAYING, GameState.PAUSED):
+                self.screen.present()
+        elif state == GameState.PLAYING:
+            # 只重绘变化区域：两次移动之间的帧通常一个矩形都不用提交
+            dirty = self.play_renderer.render(self.game)
+            self.screen.present(dirty)
+        elif state == GameState.PAUSED:
+            # 暂停遮罩盖住整屏，按整屏处理
             self._render_playfield()
-            if state == GameState.PAUSED:
-                self.play_renderer.draw_pause_overlay()
+            self.play_renderer.game_renderer.draw_pause_overlay()
+            self.screen.present()
         elif state == GameState.GAME_OVER:
             self._render_playfield()
             info = self.game.game_over_info()
@@ -481,22 +505,11 @@ class Application:
                 int(info["score"]), int(info["best"]),
                 str(info["reason"]), bool(info["record"]),
             )
-        self.screen.flip()
+            self.screen.present()
 
     def _render_playfield(self) -> None:
-        """渲染进行中的场景：背景、食物、蛇与加速特效。"""
-        self.screen.draw_background()
-        game = self.game
-        if game.snake is None or game.food_manager is None:
-            return
-        # 直接使用 GameRenderer 绘制实体与特效（读取当前皮肤配色）
-        if not hasattr(self, "play_renderer"):
-            self.play_renderer = GameRenderer(self.screen, self.skin_manager)
-        self.play_renderer.draw_foods(game.food_manager.foods)
-        self.play_renderer.draw_snake(game.snake)
-        ratio = game.speed_effect_ratio()
-        if ratio > 0:
-            self.play_renderer.draw_speed_effect(True, ratio)
+        """把当前战场整屏画进后缓冲（供暂停、结束、设置等叠加界面使用）。"""
+        self.play_renderer.render(self.game, force_full=True)
 
     def run(self) -> int:
         """运行主循环直至退出，返回进程退出码。

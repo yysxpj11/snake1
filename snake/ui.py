@@ -639,14 +639,32 @@ class SettingsPanel:
         self._notify_change()
 
     def _notify_change(self) -> None:
-        """把当前暂存值推给 on_change 回调，实现"调整即生效"。"""
+        """把当前暂存值经校验后推给 on_change 回调，实现"调整即生效"。"""
         if self.on_change is not None:
-            self.on_change(self.volume_ratio, self.difficulty, self.skin)
+            self.on_change(*self.apply())
+
+    def apply(self) -> Tuple[float, Difficulty, str]:
+        """把暂存值校验后返回 (音量比例, 难度, 皮肤名)。
+
+        实时生效与回车保存共用这一份取值逻辑，避免越界/非法值流入
+        SoundManager 与 Config：
+        - 音量按 0-100 裁剪后换算为 0.0-1.0（外部直接改字段也不会越界）；
+        - 难度必须是 Difficulty 枚举，否则回退普通档；
+        - 皮肤不在可选列表中时回退第一套（列表为空则原样返回）。
+        """
+        volume = max(0.0, min(1.0, float(self.volume) / 100.0))
+        difficulty = (
+            self.difficulty if isinstance(self.difficulty, Difficulty) else Difficulty.NORMAL
+        )
+        skin = self.skin
+        if self.skin_names and skin not in self.skin_names:
+            skin = self.skin_names[0]
+        return volume, difficulty, skin
 
     def confirm(self) -> str:
-        """回车保存：触发 on_save 回调并返回动作名 "save"。"""
+        """回车保存：触发 on_save 回调并返回动作名 "save"（取值经 apply 校验）。"""
         if self.on_save is not None:
-            self.on_save(self.volume_ratio, self.difficulty, self.skin)
+            self.on_save(*self.apply())
         return "save"
 
     def cancel(self) -> str:

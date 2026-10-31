@@ -25,7 +25,7 @@ from .settings import SettingsManager
 from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
-from .utils import Config, Difficulty, setup_logging
+from .utils import Config, Difficulty, clamp, setup_logging
 from .ui import GameRenderer, Menu, MenuRenderer, Screen, SettingsPanel
 
 
@@ -195,25 +195,31 @@ class Application:
     def _on_settings_change(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
         """面板调整回调：音量 / 难度 / 皮肤一改就生效，不必等回车保存。
 
-        - 音量：直接写 SoundManager 主音量，正在播放/下次播放都按新音量走；
-        - 难度：写入 config，Game.current_move_interval 每帧读取它，
-          所以下一格起蛇的移动间隔立刻变化，得分倍率同步刷新；
-        - 皮肤：立即重绘背景配色，菜单标签一并同步。
-        此时不落盘，持久化仍由回车保存负责（ESC 可整体回滚）。
+        面板传来的三个值已由 SettingsPanel.apply 裁剪校验过，
+        这里只负责分发到具体组件；此时不落盘，写盘仍由回车保存负责。
+        """
+        self._apply_settings(volume, difficulty, skin_name)
+
+    def _apply_settings(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
+        """把一组设置应用到各组件（实时预览、保存、取消回滚共用这条通路）。
+
+        - 音量：写入 SoundManager 主音量，并同步 config 供后续构造使用；
+        - 难度：交给 Game.apply_difficulty 写入配置并刷新得分倍率，
+          移动间隔每帧从 config 读取，因此蛇的速度立刻跟着变；
+        - 皮肤：经 SkinManager 切换并重建背景配色，菜单标签一并同步。
         """
         self.sound.set_volume(volume)
-        self.config.sound_volume = volume
-        if difficulty != self.config.difficulty:
-            self.menu_logic.set_difficulty(difficulty, notify=True)
+        self.config.sound_volume = clamp(volume, 0.0, 1.0)
+        changed = self.game.apply_difficulty(difficulty)
+        if changed or self.menu_logic.difficulty != difficulty:
+            # 倍率已由 apply_difficulty 刷新，这里只同步菜单里的难度标签
+            self.menu_logic.set_difficulty(difficulty, notify=False)
         if skin_name and skin_name != self.skin_manager.current.name:
             self.menu_logic.set_skin(skin_name, notify=True)
 
     def _on_settings_save(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
-        """回车保存：把面板暂存值应用到各组件并持久化到 settings.json。"""
-        self.sound.set_volume(volume)
-        self.config.sound_volume = volume
-        self.menu_logic.set_difficulty(difficulty, notify=True)
-        self.menu_logic.set_skin(skin_name, notify=True)
+        """回车保存：确认当前设置生效并持久化到 settings.json。"""
+        self._apply_settings(volume, difficulty, skin_name)
         # 持久化：下次启动自动恢复这三项设置
         self.settings.update(volume=volume, difficulty=difficulty.value, skin=skin_name)
         self._settings_snapshot = None
@@ -230,12 +236,7 @@ class Application:
             return
         volume, difficulty, skin_name = self._settings_snapshot
         self._settings_snapshot = None
-        self.sound.set_volume(volume)
-        self.config.sound_volume = volume
-        if difficulty != self.config.difficulty:
-            self.menu_logic.set_difficulty(difficulty, notify=True)
-        if skin_name and skin_name != self.skin_manager.current.name:
-            self.menu_logic.set_skin(skin_name, notify=True)
+        self._apply_settings(volume, difficulty, skin_name)
 
     def _close_settings(self, notice: str) -> None:
         """关闭设置面板，notice 为空时不显示提示。
@@ -258,9 +259,8 @@ class Application:
             self.notice_timer = 3.0
 
     def _on_difficulty_change(self, difficulty: Difficulty) -> None:
-        """难度切换回调：写入设置并同步得分倍率（速度在每帧读取设置）。"""
-        self.config.difficulty = difficulty
-        self.game.score_manager.multiplier = difficulty.score_multiplier
+        """难度切换回调：交给 Game.apply_difficulty 立即改变速度与得分倍率。"""
+        self.game.apply_difficulty(difficulty)
 
     def _on_skin_change(self, skin_name: str) -> None:
         """皮肤切换回调：更新 SkinManager 并重建窗口背景配色。"""

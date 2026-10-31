@@ -18,7 +18,7 @@ from typing import Dict, List, Optional, Tuple
 from .food import Food, FoodManager, FoodType
 from .snake import Direction, Snake, WallMode
 from .sound import SoundManager
-from .utils import Config, HighScoreStore, Timer, clamp
+from .utils import Config, Difficulty, HighScoreStore, Timer, clamp
 
 
 class GameState(Enum):
@@ -213,6 +213,20 @@ class Game:
     def is_paused(self) -> bool:
         """当前是否处于暂停状态。"""
         return self.state == GameState.PAUSED
+
+    def apply_difficulty(self, difficulty: Difficulty) -> bool:
+        """立即切换难度：写入配置并刷新得分倍率，返回是否真的发生了变化。
+
+        移动间隔由 current_move_interval 每帧从 config 读取，因此这里改完
+        配置后，下一格起蛇的速度就按新难度走，不需要重开一局。
+        非 Difficulty 的脏值一律忽略（返回 False），避免把非法值写进配置。
+        """
+        if not isinstance(difficulty, Difficulty):
+            return False
+        changed = difficulty != self.config.difficulty
+        self.config.difficulty = difficulty
+        self.score_manager.multiplier = difficulty.score_multiplier
+        return changed
 
     def back_to_menu(self) -> None:
         """返回主菜单。"""

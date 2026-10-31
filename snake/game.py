@@ -22,9 +22,10 @@ from .utils import Config, HighScoreStore, Timer, clamp
 
 
 class GameState(Enum):
-    """游戏状态机：菜单 / 进行中 / 暂停 / 结束。"""
+    """游戏状态机：菜单 / 设置 / 进行中 / 暂停 / 结束。"""
 
     MENU = "menu"
+    SETTINGS = "settings"
     PLAYING = "playing"
     PAUSED = "paused"
     GAME_OVER = "game_over"
@@ -212,6 +213,13 @@ class Game:
     def back_to_menu(self) -> None:
         """返回主菜单。"""
         self.state = GameState.MENU
+
+    def enter_settings(self) -> bool:
+        """进入设置面板（仅从菜单可进入），成功返回 True。"""
+        if self.state != GameState.MENU:
+            return False
+        self.state = GameState.SETTINGS
+        return True
 
     @property
     def score(self) -> int:

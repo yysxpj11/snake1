@@ -25,7 +25,7 @@ from .skin import SkinManager
 from .snake import Direction, WallMode
 from .sound import SoundManager
 from .utils import Config, Difficulty, setup_logging
-from .ui import GameRenderer, Menu, MenuRenderer, Screen
+from .ui import GameRenderer, Menu, MenuRenderer, Screen, SettingsPanel
 
 
 # 长按 C 键清除最高分所需的按住时长（秒）
@@ -127,6 +127,8 @@ class Application:
         self._clear_done = False    # 本次按住是否已执行清除
         self.notice = ""            # 菜单底部临时提示
         self.notice_timer = 0.0
+        # 设置面板：进入设置状态时创建，保存/返回后置空
+        self.settings_panel: Optional[SettingsPanel] = None
 
     def _on_menu_select(self, action: str) -> None:
         """菜单确认回调：根据动作名执行开始游戏 / 退出。
@@ -136,8 +138,43 @@ class Application:
         """
         if action == "start":
             self._start_game()
+        elif action == "settings":
+            # 打开设置面板：暂存值取当前生效设置
+            self._open_settings()
         elif action == "quit":
             self.running = False
+
+    def _open_settings(self) -> None:
+        """进入设置面板状态，并以当前设置为初值创建面板。"""
+        if self.game.enter_settings():
+            self.settings_panel = SettingsPanel(
+                volume=self.config.sound_volume,
+                difficulty=self.config.difficulty,
+                skin=self.skin_manager.current.name,
+                skin_names=self.skin_manager.names(),
+                on_save=self._on_settings_save,
+                on_cancel=self._on_settings_cancel,
+            )
+
+    def _on_settings_save(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
+        """回车保存：把面板暂存值应用到各组件并返回菜单。"""
+        self.sound.set_volume(volume)
+        self.config.sound_volume = volume
+        self.menu_logic.set_difficulty(difficulty, notify=True)
+        self.menu_logic.set_skin(skin_name, notify=True)
+        self._close_settings("设置已保存")
+
+    def _on_settings_cancel(self) -> None:
+        """ESC 返回：放弃未保存的修改，直接回到菜单。"""
+        self._close_settings("")
+
+    def _close_settings(self, notice: str) -> None:
+        """关闭设置面板回到菜单，notice 为空时不显示提示。"""
+        self.game.back_to_menu()
+        self.settings_panel = None
+        if notice:
+            self.notice = notice
+            self.notice_timer = 3.0
 
     def _on_difficulty_change(self, difficulty: Difficulty) -> None:
         """难度切换回调：写入设置并同步得分倍率（速度在每帧读取设置）。"""
@@ -157,6 +194,10 @@ class Application:
             return
         if self.game.state == GameState.MENU:
             self.running = False
+        elif self.game.state == GameState.SETTINGS:
+            # 设置面板中的 ESC：放弃修改并返回菜单
+            if self.settings_panel is not None:
+                self.settings_panel.cancel()
         else:
             self._return_to_menu()
 
@@ -205,6 +246,17 @@ class Application:
             logger = setup_logging()
             logger.info("最高分记录已清除")
 
+    def _handle_settings_events(self, events: List[pygame.event.Event]) -> None:
+        """处理设置面板状态事件：↑↓ 切换设置项、回车保存、ESC 由全局处理返回。"""
+        panel = self.settings_panel
+        if panel is None:
+            return
+        for event in events:
+            if event.type == pygame.KEYDOWN:
+                menu_key = KEY_MENU_MAP.get(event.key)
+                if menu_key is not None:
+                    panel.handle_key(menu_key)
+
     def _start_game(self) -> None:
         """开始新一局。"""
         self.move_accumulator = 0.0
@@ -245,6 +297,8 @@ class Application:
         state = self.game.state
         if state == GameState.MENU:
             self._handle_menu_events(events)
+        elif state == GameState.SETTINGS:
+            self._handle_settings_events(events)
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._handle_playing_events(events)
         elif state == GameState.GAME_OVER:
@@ -265,7 +319,7 @@ class Application:
             self.notice_timer = max(0.0, self.notice_timer - dt)
             if self.notice_timer == 0:
                 self.notice = ""
-        if self.game.state == GameState.MENU:
+        if self.game.state in (GameState.MENU, GameState.SETTINGS):
             self._update_clear_hold(dt)
             return
         if self.game.state == GameState.PLAYING:
@@ -278,6 +332,9 @@ class Application:
             self.menu.draw_main_menu(
                 self.game.best_score, self.menu_logic, self.skin_manager, self.notice
             )
+        elif state == GameState.SETTINGS:
+            if self.settings_panel is not None:
+                self.menu.draw_settings_panel(self.settings_panel, self.skin_manager)
         elif state in (GameState.PLAYING, GameState.PAUSED):
             self._render_playfield()
             if state == GameState.PAUSED:

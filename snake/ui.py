@@ -393,6 +393,7 @@ class Menu:
                 ("开始游戏", "start"),
                 (f"选择难度: {self.difficulty.label}", "difficulty"),
                 (f"选择皮肤: {self.skin}" if self.skin else "选择皮肤", "skin"),
+                ("设置", "settings"),
                 ("退出", "quit"),
             ]
         self.items: List[Tuple[str, str]] = list(items)
@@ -523,6 +524,107 @@ class Menu:
         return None
 
 
+class SettingsPanel:
+    """设置面板的逻辑状态：设置项导航与暂存值。
+
+    与 Menu 同样的设计思路——只管状态与键盘逻辑、不直接绘制，
+    绘制由 MenuRenderer.draw_settings_panel 完成，便于脱离窗口做单元测试。
+
+    面板包含三个设置项：音量滑条、难度选择、皮肤选择；
+    另外固定显示"暂停键说明"文字（无需导航）。
+
+    Attributes:
+        items: 设置项列表，形如 [(显示名, 动作名), ...]。
+        selected_index: 当前选中的设置项下标。
+        volume: 暂存的音量值（0-100 整数，保存时换算为 0.0-1.0）。
+        difficulty: 暂存的难度档位。
+        skin: 暂存的皮肤名称。
+    """
+
+    def __init__(
+        self,
+        volume: float = 0.7,
+        difficulty: Optional[Difficulty] = None,
+        skin: str = "",
+        skin_names: Optional[List[str]] = None,
+        on_save=None,
+        on_cancel=None,
+    ) -> None:
+        """初始化设置项与暂存值（默认取当前生效的设置）。
+
+        Args:
+            volume: 当前音量（0.0-1.0），面板内部换算为 0-100 整数。
+            difficulty: 当前难度档位，默认 NORMAL。
+            skin: 当前皮肤名称。
+            skin_names: 全部可选皮肤名称（保存/预览用）。
+            on_save: 回车保存时的回调，参数为 (volume, difficulty, skin_name)。
+            on_cancel: ESC 返回时的回调（用于放弃未保存的修改）。
+        """
+        self.items: List[Tuple[str, str]] = [
+            ("音量", "volume"),
+            ("难度", "difficulty"),
+            ("皮肤", "skin"),
+        ]
+        self.selected_index = 0
+        self.volume: int = max(0, min(100, int(round(volume * 100))))
+        self.difficulty: Difficulty = difficulty or Difficulty.NORMAL
+        self.skin: str = skin
+        self.skin_names: List[str] = list(skin_names) if skin_names else []
+        self.on_save = on_save
+        self.on_cancel = on_cancel
+
+    @property
+    def volume_ratio(self) -> float:
+        """音量的 0.0-1.0 表示（供 SoundManager 使用）。"""
+        return self.volume / 100.0
+
+    @property
+    def selected_action(self) -> str:
+        """当前选中设置项的动作名。"""
+        return self.items[self.selected_index][1]
+
+    @property
+    def selected_text(self) -> str:
+        """当前选中设置项的显示名。"""
+        return self.items[self.selected_index][0]
+
+    def move_up(self) -> None:
+        """向上切换选中项，到顶循环回最后一项。"""
+        self.selected_index = (self.selected_index - 1) % len(self.items)
+
+    def move_down(self) -> None:
+        """向下切换选中项，到底循环回第一项。"""
+        self.selected_index = (self.selected_index + 1) % len(self.items)
+
+    def confirm(self) -> str:
+        """回车保存：触发 on_save 回调并返回动作名 "save"。"""
+        if self.on_save is not None:
+            self.on_save(self.volume_ratio, self.difficulty, self.skin)
+        return "save"
+
+    def cancel(self) -> str:
+        """ESC 返回：触发 on_cancel 回调并返回动作名 "back"（未保存的修改被放弃）。"""
+        if self.on_cancel is not None:
+            self.on_cancel()
+        return "back"
+
+    def handle_key(self, key: str) -> Optional[str]:
+        """处理一个抽象按键，key 可为 up / down / confirm。
+
+        返回 confirm 产生的 "save"；其余操作返回 None。
+        （左右键调整数值的逻辑在设置项功能中接入。）
+        """
+        if key == "up":
+            self.move_up()
+            return None
+        if key == "down":
+            self.move_down()
+            return None
+        if key == "confirm":
+            return self.confirm()
+        return None
+
+
 def build_vertical_gradient(
     width: int,
     height: int,
@@ -611,6 +713,113 @@ class MenuRenderer:
             rects.append(rect)
         return rects
 
+    # -- 设置面板 ----------------------------------------------------------
+
+    # 设置面板的排布参数（行高更大，容纳滑条与档位条）
+    SETTING_ROW_WIDTH = 420
+    SETTING_ROW_HEIGHT = 56
+    SETTING_ROW_GAP = 16
+
+    def settings_item_rects(self, panel: "SettingsPanel") -> List[pygame.Rect]:
+        """计算设置面板各行的屏幕矩形，与绘制位置保持一致。"""
+        w, h = self.screen.config.window_width, self.screen.config.window_height
+        start_y = int(h * 0.42)
+        rects: List[pygame.Rect] = []
+        for index in range(len(panel.items)):
+            rect = pygame.Rect(
+                0, 0, MenuRenderer.SETTING_ROW_WIDTH, MenuRenderer.SETTING_ROW_HEIGHT
+            )
+            rect.center = (
+                w // 2,
+                start_y + index * (MenuRenderer.SETTING_ROW_HEIGHT + MenuRenderer.SETTING_ROW_GAP),
+            )
+            rects.append(rect)
+        return rects
+
+    def draw_settings_panel(self, panel: "SettingsPanel", skin_manager=None) -> None:
+        """绘制设置面板：音量滑条、难度选择、皮肤选择与暂停键说明。
+
+        skin_manager 传入时按当前皮肤实时换肤（背景渐变与标题配色）。
+        """
+        skin = skin_manager.current if skin_manager is not None else None
+        self.screen.surface.blit(self._ensure_gradient(skin), (0, 0))
+        w, h = self.screen.config.window_width, self.screen.config.window_height
+        fonts = self.screen.fonts
+
+        # 标题（与主菜单同一风格）
+        title_color = skin.accent if skin is not None else Palette.SNAKE_HEAD
+        title = fonts.render("设置", 48, title_color)
+        title_rect = title.get_rect(center=(w // 2, int(h * 0.2)))
+        self.screen.surface.blit(title, title_rect)
+
+        # 三个设置行：音量滑条 / 难度档位条 / 皮肤预览条
+        rects = self.settings_item_rects(panel)
+        for index, (label, action) in enumerate(panel.items):
+            rect = rects[index]
+            selected = index == panel.selected_index
+            bg = Palette.BUTTON_HOVER if selected else Palette.BUTTON_BG
+            border = (
+                (skin.snake_head if skin is not None else Palette.SNAKE_HEAD)
+                if selected
+                else Palette.PANEL_BORDER
+            )
+            pygame.draw.rect(self.screen.surface, bg, rect, border_radius=8)
+            pygame.draw.rect(self.screen.surface, border, rect, 2, border_radius=8)
+            # 左侧固定标签
+            prefix = "▶ " if selected else ""
+            name = fonts.render(f"{prefix}{label}", 24, Palette.TEXT_PRIMARY if selected else Palette.TEXT_DIM)
+            self.screen.surface.blit(name, name.get_rect(midleft=(rect.left + 18, rect.centery)))
+            # 右侧控件
+            if action == "volume":
+                self._draw_volume_slider(rect, panel.volume, selected)
+            elif action == "difficulty":
+                self._draw_difficulty_chips(rect, panel.difficulty, selected)
+            elif action == "skin" and skin_manager is not None:
+                self._draw_skin_chips(rect, panel.skin, skin_manager, selected)
+
+        # 暂停键说明（固定文字，无需导航）
+        hint_y = rects[-1].bottom + 34
+        self.screen.draw_text(
+            "暂停键说明: 游戏中按 P 暂停 / 继续，按 ESC 返回开始菜单",
+            (w // 2, hint_y),
+            18,
+            Palette.TEXT_DIM,
+            center=True,
+        )
+        self.screen.draw_text(
+            "←/→ 调整数值 · 回车 保存 · ESC 返回",
+            (w // 2, h - 36),
+            16,
+            Palette.TEXT_DIM,
+            center=True,
+        )
+
+    def _draw_volume_slider(self, row_rect: pygame.Rect, volume: int, active: bool) -> None:
+        """在设置行右侧绘制音量滑条：轨道 + 已填充部分 + 百分比文字。"""
+        x = row_rect.centerx - 20
+        y = row_rect.centery
+        track_w, track_h = 200, 10
+        track = pygame.Rect(x, y - track_h // 2, track_w, track_h)
+        # 轨道（未选中时更暗）
+        pygame.draw.rect(
+            self.screen.surface,
+            Palette.PANEL_BG if not active else Palette.BUTTON_BG,
+            track,
+            border_radius=track_h // 2,
+        )
+        pygame.draw.rect(self.screen.surface, Palette.PANEL_BORDER, track, 1, border_radius=track_h // 2)
+        # 已填充部分
+        fill_w = int(track_w * volume / 100)
+        if fill_w > 0:
+            fill = pygame.Rect(x, y - track_h // 2, fill_w, track_h)
+            pygame.draw.rect(self.screen.surface, Palette.SUCCESS, fill, border_radius=track_h // 2)
+        # 滑块
+        knob_x = x + fill_w
+        pygame.draw.circle(self.screen.surface, Palette.TEXT_PRIMARY, (knob_x, y), 9)
+        pygame.draw.circle(self.screen.surface, Palette.PANEL_BORDER, (knob_x, y), 9, 2)
+        # 百分比
+        self.screen.draw_text(f"{volume}%", (knob_x + 20, y - 10), 18, Palette.TEXT_PRIMARY)
+
     def draw_main_menu(
         self, best_score: int, menu: "Menu", skin_manager=None, notice: Optional[str] = None
     ) -> None:
@@ -659,10 +868,10 @@ class MenuRenderer:
             self.screen.surface.blit(rendered, text_rect)
             # 难度项右侧绘制三档档位条，高亮当前档位
             if action == "difficulty":
-                self._draw_difficulty_chips(rect, menu, selected)
+                self._draw_difficulty_chips(rect, menu.difficulty, selected)
             # 皮肤项右侧绘制皮肤预览条（各皮肤蛇头色样 + 名称）
             elif action == "skin" and skin_manager is not None:
-                self._draw_skin_chips(rect, menu, skin_manager, selected)
+                self._draw_skin_chips(rect, menu.skin, skin_manager, selected)
 
         self.screen.draw_text(
             "↑/↓ 选择 · ←/→ 切换难度/皮肤 · 回车 确认 · 长按 C 清除最高分 · ESC 退出",
@@ -673,9 +882,9 @@ class MenuRenderer:
         )
 
     def _draw_skin_chips(
-        self, item_rect: pygame.Rect, menu: "Menu", skin_manager, active: bool
+        self, item_rect: pygame.Rect, current_skin: str, skin_manager, active: bool
     ) -> None:
-        """在皮肤菜单项右侧绘制各皮肤预览条：色块 + 皮肤名，高亮当前皮肤。
+        """在菜单项右侧绘制各皮肤预览条：色块 + 皮肤名，高亮当前皮肤。
 
         每个预览条左侧画该皮肤的蛇头颜色方块（实时预览主色调），
         当前皮肤条使用该皮肤的蛇头色描边并提亮。
@@ -690,7 +899,7 @@ class MenuRenderer:
         x = min(x, max_x)
         for index, chip_skin in enumerate(chips):
             chip = pygame.Rect(x + index * (chip_w + gap), y, chip_w, chip_h)
-            is_current = chip_skin.name == menu.skin
+            is_current = chip_skin.name == current_skin
             bg_color = Palette.BUTTON_HOVER if is_current else (
                 Palette.BUTTON_BG if active else Palette.PANEL_BG
             )
@@ -705,8 +914,8 @@ class MenuRenderer:
             label_rect = label.get_rect(midleft=(chip.x + 24, chip.centery))
             self.screen.surface.blit(label, label_rect)
 
-    def _draw_difficulty_chips(self, item_rect: pygame.Rect, menu: "Menu", active: bool) -> None:
-        """在难度菜单项右侧绘制 简单/普通/困难 三个档位标签，高亮当前档位。
+    def _draw_difficulty_chips(self, item_rect: pygame.Rect, current: Difficulty, active: bool) -> None:
+        """在菜单项右侧绘制 简单/普通/困难 三个档位标签，高亮当前档位。
 
         active 表示难度项当前是否被选中，选中时档位条整体更亮以突出可操作。
         """
@@ -721,7 +930,7 @@ class MenuRenderer:
         x = min(x, max_x)
         for index, level in enumerate(levels):
             chip = pygame.Rect(x + index * (chip_w + gap), y, chip_w, chip_h)
-            is_current = level == menu.difficulty
+            is_current = level == current
             if is_current:
                 bg_color = Palette.SNAKE_HEAD
                 text_color = Palette.BACKGROUND

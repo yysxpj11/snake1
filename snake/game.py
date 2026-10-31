@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import time
 from enum import Enum
@@ -19,6 +20,10 @@ from .food import Food, FoodManager, FoodType
 from .snake import Direction, Snake, WallMode
 from .sound import SoundManager
 from .utils import Config, Difficulty, HighScoreStore, Timer, clamp
+
+# 模块级 logger：包级 logger "snake" 已由 LogManager 配好控制台 + game.log 双输出，
+# 这里只需 __name__ 命名，日志会自动冒泡上去（无需传 logger 参数）
+logger = logging.getLogger(__name__)
 
 
 class GameState(Enum):
@@ -177,6 +182,14 @@ class Game:
         self.speed_timer = None
         self.state = GameState.PLAYING
         self._state_before_settings = None
+        # 游戏开始：记录本局参数，便于事后复盘（如"为什么这局这么快"）
+        logger.info(
+            "游戏开始：关卡=%d 难度=%s 边界=%s 初始长度=%d",
+            level,
+            self.config.difficulty.label,
+            self.wall_mode.name,
+            self.snake.length,
+        )
         # 游戏开始：播放开场音效（未接入音效时安全跳过）
         if self.sound is not None:
             self.sound.play("start")
@@ -185,6 +198,11 @@ class Game:
         """进入暂停状态（仅进行中可暂停），返回是否成功暂停。"""
         if self.state == GameState.PLAYING:
             self.state = GameState.PAUSED
+            logger.info(
+                "游戏暂停：得分=%d 长度=%d",
+                self.score,
+                self.snake.length if self.snake is not None else 0,
+            )
             return True
         return False
 
@@ -192,6 +210,7 @@ class Game:
         """从暂停恢复到进行中，返回是否成功恢复。"""
         if self.state == GameState.PAUSED:
             self.state = GameState.PLAYING
+            logger.info("游戏继续：得分=%d", self.score)
             return True
         return False
 
@@ -232,6 +251,7 @@ class Game:
         """返回主菜单。"""
         self.state = GameState.MENU
         self._state_before_settings = None
+        logger.debug("返回主菜单")
 
     def enter_settings(self) -> bool:
         """进入设置面板，成功返回 True。
@@ -244,6 +264,7 @@ class Game:
             return False
         self._state_before_settings = self.state
         self.state = GameState.SETTINGS
+        logger.debug("打开设置面板（来源=%s）", self._state_before_settings.name)
         return True
 
     def exit_settings(self) -> GameState:
@@ -255,6 +276,7 @@ class Game:
         previous = self._state_before_settings or GameState.MENU
         self.state = previous
         self._state_before_settings = None
+        logger.debug("关闭设置面板，回到 %s", previous.name)
         return self.state
 
     @property
@@ -330,6 +352,7 @@ class Game:
         assert self.food_manager is not None and self.snake is not None
         if not self.food_manager.has_normal_food:
             self.food_manager.spawn_normal(self.snake.positions())
+            logger.debug("补充普通食物：场上食物数=%d", len(self.food_manager.foods))
 
     def _advance_snake(self) -> None:
         """蛇前进一格并处理吃食物与死亡判定。"""
@@ -357,11 +380,20 @@ class Game:
         gained = self.score_manager.register_eat(effect.score_delta)
         self.snake.grow(effect.growth)
         self.stats.register_eat(food.ftype)
+        # 吃到食物：写日志（类型 + 本次得分 + 当前总分/长度，便于分析得分曲线）
+        logger.info(
+            "吃到食物：类型=%s 本次得分=%d 总分=%d 长度=%d",
+            food.ftype.name,
+            gained,
+            self.score,
+            self.snake.length,
+        )
         # 吃到食物：播放进食音效
         if self.sound is not None:
             self.sound.play("eat")
         if effect.speed_boost > 0:
             self.speed_timer = Timer(effect.speed_boost)
+            logger.debug("加速生效：持续 %.1f 秒", effect.speed_boost)
         label = self.score_manager.combo_label()
         self.stats.death_reason = ""  # 保持字段干净
         self.last_gain_message = effect.message if not label else f"{effect.message} {label}"
@@ -379,6 +411,16 @@ class Game:
         if self.score > 0:
             self.store.add_score(self.score)
         self.state = GameState.GAME_OVER
+        # 游戏结束：一条 INFO 覆盖复盘需要的关键信息
+        logger.info(
+            "游戏结束：原因=%s 得分=%d 最高分=%d 用时=%.1fs 吃到=%d 个 新纪录=%s",
+            reason,
+            self.score,
+            self.best_score,
+            self.stats.elapsed,
+            self.stats.foods_eaten,
+            "是" if self.is_new_record else "否",
+        )
 
     # -- 查询 ---------------------------------------------------------------
 

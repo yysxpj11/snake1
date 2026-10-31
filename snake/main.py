@@ -234,7 +234,12 @@ class Application:
         """回车保存：确认当前设置生效并持久化到 settings.json。"""
         self._apply_settings(volume, difficulty, skin_name)
         # 持久化：下次启动自动恢复这三项设置
-        self.settings.update(volume=volume, difficulty=difficulty.value, skin=skin_name)
+        saved = self.settings.update(
+            volume=volume, difficulty=difficulty.value, skin=skin_name
+        )
+        if not saved:
+            # 写盘失败属于真错误：本次修改仍在内存中生效，但下次启动会丢
+            setup_logging().error("设置保存失败，本次修改仅在当前运行内生效")
         self._settings_snapshot = None
         self._close_settings("设置已保存")
 

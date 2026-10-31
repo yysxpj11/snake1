@@ -19,6 +19,7 @@ from typing import List, Optional, Tuple
 import pygame
 
 from .food import FoodType
+from .fps import MAX_FPS, FrameRateController
 from .game import Game, GameState
 from .highscore import HighScoreManager
 from .settings import SettingsManager
@@ -70,18 +71,24 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
     parser.add_argument("--wrap", action="store_true", help="开启穿墙模式")
     parser.add_argument("--no-sound", action="store_true", help="关闭音效")
     parser.add_argument("--fullscreen", action="store_true", help="全屏运行")
-    parser.add_argument("--fps", type=int, default=60, help="目标帧率")
+    parser.add_argument(
+        "--fps", type=int, default=MAX_FPS, help=f"目标帧率（上限 {MAX_FPS}，只能调低）"
+    )
     parser.add_argument("--seed", type=int, default=None, help="随机种子（调试用）")
     return parser.parse_args(argv)
 
 
 def build_config(args: argparse.Namespace) -> Config:
-    """把命令行参数转换为 Config 对象（难度字符串转为 Difficulty 枚举）。"""
+    """把命令行参数转换为 Config 对象（难度字符串转为 Difficulty 枚举）。
+
+    帧率在这里就被压到 MAX_FPS 以内：--fps 只允许调低，不允许突破 60，
+    这样无论命令行怎么传，主循环都不会跑到 60FPS 以上。
+    """
     config = Config(
         window_width=args.width,
         window_height=args.height,
         cell_size=args.cell,
-        fps=args.fps,
+        fps=min(args.fps, MAX_FPS),
         difficulty=Difficulty.from_name(args.difficulty),
         sound_enabled=not args.no_sound,
         fullscreen=args.fullscreen,
@@ -129,6 +136,8 @@ class Application:
         self.hud_message = ""
         self.move_accumulator = 0.0
         self.running = True
+        # 帧率控制：主循环的 dt 全部来自它（限帧 60 + 步长裁剪 + FPS 统计）
+        self.frame_controller = FrameRateController(limit=config.fps)
         # 长按 C 清除最高分的输入状态
         self._clear_armed = False   # C 键是否处于按下状态
         self._clear_hold = 0.0      # 已按住时长（秒）
@@ -490,17 +499,27 @@ class Application:
             self.play_renderer.draw_speed_effect(True, ratio)
 
     def run(self) -> int:
-        """运行主循环直至退出，返回进程退出码。"""
-        clock = pygame.time.Clock()
+        """运行主循环直至退出，返回进程退出码。
+
+        每帧固定顺序：clock.tick 限帧并取 dt -> 处理事件 -> 逻辑更新 -> 渲染。
+        dt 由 FrameRateController 提供（已裁剪到 0.25s 以内），因此卡顿时
+        蛇不会一口气连走好几格。
+        """
         logger = setup_logging()
-        logger.info("游戏启动，难度=%s", self.config.difficulty)
+        logger.info(
+            "游戏启动，难度=%s，帧率上限=%d FPS", self.config.difficulty, self.frame_controller.limit
+        )
         while self.running:
-            dt = clock.tick(self.config.fps) / 1000.0
+            dt = self.frame_controller.tick()
             self.process_events()
             self.update(dt)
             self.render()
         pygame.quit()
-        logger.info("游戏退出")
+        logger.info(
+            "游戏退出，共 %d 帧，平均 %.1f FPS",
+            self.frame_controller.frame_count,
+            self.frame_controller.average_fps(),
+        )
         return 0
 
 

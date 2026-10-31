@@ -183,12 +183,13 @@ class TestSettingsStateFlow:
         panel.handle_key("down")
         panel.handle_key("right")  # 经典绿 -> 霓虹蓝
 
-        # 保存前：设置未变
-        assert app.config.sound_volume == pytest.approx(0.7)
-        assert app.config.difficulty == Difficulty.NORMAL
-        assert app.skin_manager.current.name != SKIN_NEON
+        # 调整即生效：不用回车保存，音量/难度/皮肤已经实时应用
+        assert app.config.sound_volume == pytest.approx(0.3)
+        assert app.sound.master_volume == pytest.approx(0.3)
+        assert app.config.difficulty == Difficulty.HARD
+        assert app.skin_manager.current.name == SKIN_NEON
 
-        # 回车保存：音量/难度/皮肤全部生效并回到菜单
+        # 回车保存：三项设置落盘并回到菜单
         panel.handle_key("confirm")
         assert app.game.state == GameState.MENU
         assert app.config.sound_volume == pytest.approx(0.3)
@@ -199,16 +200,18 @@ class TestSettingsStateFlow:
         assert "困难" in app.menu_logic.items[app.menu_logic.difficulty_index][0]
         assert SKIN_NEON in app.menu_logic.items[app.menu_logic.skin_index][0]
 
-        # 再次进入并调整后 ESC：修改被放弃，设置保持上次保存的值
+        # 再次进入并调整后 ESC：实时预览的改动作废，回滚到上次保存的值
         app.notice = ""
         app.menu_logic.selected_index = settings_index
         app.menu_logic.handle_key("confirm")
         app.settings_panel.handle_key("right")  # 音量 30 -> 40
         assert app.settings_panel.volume == 40
+        assert app.sound.master_volume == pytest.approx(0.4)  # 预览已生效
         pygame.event.post(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
         app.process_events()
         assert app.game.state == GameState.MENU
         assert app.config.sound_volume == pytest.approx(0.3)  # 未被 40 覆盖
+        assert app.sound.master_volume == pytest.approx(0.3)  # 音量也回滚了
 
 
 if __name__ == "__main__":

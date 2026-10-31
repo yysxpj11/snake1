@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import pygame
 
@@ -137,6 +137,10 @@ class Application:
         self.notice_timer = 0.0
         # 设置面板：进入设置状态时创建，保存/返回后置空
         self.settings_panel: Optional[SettingsPanel] = None
+        # 打开面板时的设置快照：实时预览改了也要能 ESC 一键回滚
+        self._settings_snapshot: Optional[Tuple[float, Difficulty, str]] = None
+        # 音量滑条是否处于按住拖动状态
+        self._dragging_volume = False
 
     def _apply_saved_settings(self) -> None:
         """把上次保存的设置写回 Config（未保存过或单项非法时保持默认）。
@@ -171,6 +175,13 @@ class Application:
         （菜单回到菜单，游戏内回到进行中/暂停，本局不中断）。
         """
         if self.game.enter_settings():
+            # 记录快照：面板里的改动会实时生效，ESC 时据此回滚
+            self._settings_snapshot = (
+                self.config.sound_volume,
+                self.config.difficulty,
+                self.skin_manager.current.name,
+            )
+            self._dragging_volume = False
             self.settings_panel = SettingsPanel(
                 volume=self.config.sound_volume,
                 difficulty=self.config.difficulty,
@@ -178,7 +189,24 @@ class Application:
                 skin_names=self.skin_manager.names(),
                 on_save=self._on_settings_save,
                 on_cancel=self._on_settings_cancel,
+                on_change=self._on_settings_change,
             )
+
+    def _on_settings_change(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
+        """面板调整回调：音量 / 难度 / 皮肤一改就生效，不必等回车保存。
+
+        - 音量：直接写 SoundManager 主音量，正在播放/下次播放都按新音量走；
+        - 难度：写入 config，Game.current_move_interval 每帧读取它，
+          所以下一格起蛇的移动间隔立刻变化，得分倍率同步刷新；
+        - 皮肤：立即重绘背景配色，菜单标签一并同步。
+        此时不落盘，持久化仍由回车保存负责（ESC 可整体回滚）。
+        """
+        self.sound.set_volume(volume)
+        self.config.sound_volume = volume
+        if difficulty != self.config.difficulty:
+            self.menu_logic.set_difficulty(difficulty, notify=True)
+        if skin_name and skin_name != self.skin_manager.current.name:
+            self.menu_logic.set_skin(skin_name, notify=True)
 
     def _on_settings_save(self, volume: float, difficulty: Difficulty, skin_name: str) -> None:
         """回车保存：把面板暂存值应用到各组件并持久化到 settings.json。"""
@@ -188,11 +216,26 @@ class Application:
         self.menu_logic.set_skin(skin_name, notify=True)
         # 持久化：下次启动自动恢复这三项设置
         self.settings.update(volume=volume, difficulty=difficulty.value, skin=skin_name)
+        self._settings_snapshot = None
         self._close_settings("设置已保存")
 
     def _on_settings_cancel(self) -> None:
-        """ESC 返回：放弃未保存的修改，直接回到打开面板前的画面。"""
+        """ESC 返回：把实时预览过的改动回滚到打开面板前的值。"""
+        self._restore_settings_snapshot()
         self._close_settings("")
+
+    def _restore_settings_snapshot(self) -> None:
+        """把音量/难度/皮肤恢复到打开设置面板时的快照（未保存的预览作废）。"""
+        if self._settings_snapshot is None:
+            return
+        volume, difficulty, skin_name = self._settings_snapshot
+        self._settings_snapshot = None
+        self.sound.set_volume(volume)
+        self.config.sound_volume = volume
+        if difficulty != self.config.difficulty:
+            self.menu_logic.set_difficulty(difficulty, notify=True)
+        if skin_name and skin_name != self.skin_manager.current.name:
+            self.menu_logic.set_skin(skin_name, notify=True)
 
     def _close_settings(self, notice: str) -> None:
         """关闭设置面板，notice 为空时不显示提示。
@@ -203,6 +246,8 @@ class Application:
         """
         from_game = self.game.settings_from_game
         self.settings_panel = None
+        self._dragging_volume = False
+        self._settings_snapshot = None
         if from_game:
             self.game.exit_settings()
             self.move_accumulator = 0.0
@@ -283,7 +328,10 @@ class Application:
             logger.info("最高分记录已清除")
 
     def _handle_settings_events(self, events: List[pygame.event.Event]) -> None:
-        """处理设置面板状态事件：↑↓ 切换设置项、回车保存、ESC 由全局处理返回。"""
+        """处理设置面板事件：↑↓ 选项、←→ 调值、鼠标拖动音量滑条、回车保存。
+
+        ESC 由全局按键处理（回滚并返回），这里不重复处理。
+        """
         panel = self.settings_panel
         if panel is None:
             return
@@ -292,6 +340,39 @@ class Application:
                 menu_key = KEY_MENU_MAP.get(event.key)
                 if menu_key is not None:
                     panel.handle_key(menu_key)
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                if self._volume_hit(event.pos):
+                    # 按下即定位到音量项并跳到点击位置，随后拖动持续跟随
+                    self._dragging_volume = True
+                    self._select_volume_item()
+                    self._drag_volume_to(event.pos[0])
+            elif event.type == pygame.MOUSEMOTION and self._dragging_volume:
+                self._drag_volume_to(event.pos[0])
+            elif event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                self._dragging_volume = False
+
+    def _volume_hit(self, pos: Tuple[int, int]) -> bool:
+        """判断鼠标位置是否落在音量滑条的命中区域内。"""
+        panel = self.settings_panel
+        if panel is None:
+            return False
+        return self.menu.volume_hit_rect(panel).collidepoint(pos)
+
+    def _select_volume_item(self) -> None:
+        """把面板选中项切到"音量"，让随后的左右键继续调整音量。"""
+        panel = self.settings_panel
+        if panel is None:
+            return
+        actions = [action for _label, action in panel.items]
+        if "volume" in actions:
+            panel.selected_index = actions.index("volume")
+
+    def _drag_volume_to(self, mouse_x: int) -> None:
+        """把鼠标横坐标换算成音量百分比并写入面板（拖动时实时生效）。"""
+        panel = self.settings_panel
+        if panel is None:
+            return
+        panel.set_volume_percent(self.menu.volume_percent_at(panel, mouse_x))
 
     def _start_game(self) -> None:
         """开始新一局。"""

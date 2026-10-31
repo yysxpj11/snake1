@@ -549,6 +549,7 @@ class SettingsPanel:
         skin_names: Optional[List[str]] = None,
         on_save=None,
         on_cancel=None,
+        on_change=None,
     ) -> None:
         """初始化设置项与暂存值（默认取当前生效的设置）。
 
@@ -559,6 +560,9 @@ class SettingsPanel:
             skin_names: 全部可选皮肤名称（保存/预览用）。
             on_save: 回车保存时的回调，参数为 (volume, difficulty, skin_name)。
             on_cancel: ESC 返回时的回调（用于放弃未保存的修改）。
+            on_change: 数值每次变化时的回调，参数同 on_save；
+                用于"调整即生效"——每按一次左右键、每拖动一次滑条都会触发，
+                因此正式落盘（写 settings.json）仍只发生在保存时。
         """
         self.items: List[Tuple[str, str]] = [
             ("音量", "volume"),
@@ -572,6 +576,7 @@ class SettingsPanel:
         self.skin_names: List[str] = list(skin_names) if skin_names else []
         self.on_save = on_save
         self.on_cancel = on_cancel
+        self.on_change = on_change
 
     @property
     def volume_ratio(self) -> float:
@@ -605,7 +610,8 @@ class SettingsPanel:
         - 音量：步长 VOLUME_STEP，裁剪到 0-100；
         - 难度：在三档之间循环切换；
         - 皮肤：在 skin_names 中循环切换。
-        调整只改暂存值，回车保存后才应用到游戏。
+        调整后立即通过 on_change 推给应用层，实现"改完即生效"；
+        写盘持久化仍只发生在回车保存时。
         """
         action = self.selected_action
         if action == "volume":
@@ -618,6 +624,24 @@ class SettingsPanel:
             except ValueError:
                 index = 0
             self.skin = self.skin_names[(index + step) % len(self.skin_names)]
+        self._notify_change()
+
+    def set_volume_percent(self, percent: float) -> None:
+        """按百分比设置音量（鼠标拖动滑条时调用），并立即生效。
+
+        百分比会先裁剪到 0-100 再四舍五入成整数；与当前值相同时不回调，
+        避免拖动过程中每帧都向应用层重复推送同一个音量。
+        """
+        value = int(round(max(0.0, min(100.0, float(percent)))))
+        if value == self.volume:
+            return
+        self.volume = value
+        self._notify_change()
+
+    def _notify_change(self) -> None:
+        """把当前暂存值推给 on_change 回调，实现"调整即生效"。"""
+        if self.on_change is not None:
+            self.on_change(self.volume_ratio, self.difficulty, self.skin)
 
     def confirm(self) -> str:
         """回车保存：触发 on_save 回调并返回动作名 "save"。"""
@@ -745,6 +769,9 @@ class MenuRenderer:
     SETTING_ROW_WIDTH = 420
     SETTING_ROW_HEIGHT = 56
     SETTING_ROW_GAP = 16
+    # 音量滑条轨道尺寸（绘制与鼠标命中判断共用）
+    VOLUME_TRACK_WIDTH = 200
+    VOLUME_TRACK_HEIGHT = 10
 
     def settings_item_rects(self, panel: "SettingsPanel") -> List[pygame.Rect]:
         """计算设置面板各行的屏幕矩形，与绘制位置保持一致。"""
@@ -761,6 +788,40 @@ class MenuRenderer:
             )
             rects.append(rect)
         return rects
+
+    @staticmethod
+    def _volume_track_for_row(row_rect: pygame.Rect) -> pygame.Rect:
+        """给定设置行矩形，返回音量滑条轨道矩形（绘制/命中/坐标换算共用）。"""
+        track_h = MenuRenderer.VOLUME_TRACK_HEIGHT
+        return pygame.Rect(
+            row_rect.centerx - 20,
+            row_rect.centery - track_h // 2,
+            MenuRenderer.VOLUME_TRACK_WIDTH,
+            track_h,
+        )
+
+    def volume_track_rect(self, panel: "SettingsPanel") -> pygame.Rect:
+        """返回音量滑条轨道的屏幕矩形（用于把鼠标 x 坐标换算成音量）。"""
+        rects = self.settings_item_rects(panel)
+        actions = [action for _label, action in panel.items]
+        index = actions.index("volume") if "volume" in actions else 0
+        return self._volume_track_for_row(rects[index])
+
+    def volume_hit_rect(self, panel: "SettingsPanel") -> pygame.Rect:
+        """返回音量滑条的鼠标命中区域。
+
+        轨道本身只有 10px 高，直接点中太苛刻，命中区上下各外扩 14px、
+        左右各外扩 10px，让"按住拖动"更容易触发。
+        """
+        return self.volume_track_rect(panel).inflate(20, 28)
+
+    def volume_percent_at(self, panel: "SettingsPanel", x: int) -> float:
+        """把屏幕横坐标换算成音量百分比（0-100，超出轨道两端自动裁剪）。"""
+        track = self.volume_track_rect(panel)
+        if track.width <= 0:
+            return 0.0
+        ratio = (x - track.left) / float(track.width)
+        return max(0.0, min(100.0, ratio * 100.0))
 
     def draw_settings_panel(
         self, panel: "SettingsPanel", skin_manager=None, translucent: bool = False
@@ -814,16 +875,16 @@ class MenuRenderer:
         # 暂停键说明（固定文字，无需导航）
         hint_y = rects[-1].bottom + 34
         self.screen.draw_text(
-            "暂停键说明: 游戏中按 P 暂停 / 继续，按 V 打开设置",
+            "暂停键说明: P 暂停 / 继续 · V 打开设置 · 调整立即生效",
             (w // 2, hint_y),
             18,
             Palette.TEXT_DIM,
             center=True,
         )
         footer = (
-            "←/→ 调整数值 · 回车 保存 · ESC 返回游戏"
+            "←/→ 调整数值 · 拖动滑条调音量 · 回车 保存 · ESC 返回游戏"
             if translucent
-            else "←/→ 调整数值 · 回车 保存 · ESC 返回"
+            else "←/→ 调整数值 · 拖动滑条调音量 · 回车 保存 · ESC 返回"
         )
         self.screen.draw_text(
             footer,
@@ -834,24 +895,29 @@ class MenuRenderer:
         )
 
     def _draw_volume_slider(self, row_rect: pygame.Rect, volume: int, active: bool) -> None:
-        """在设置行右侧绘制音量滑条：轨道 + 已填充部分 + 百分比文字。"""
-        x = row_rect.centerx - 20
-        y = row_rect.centery
-        track_w, track_h = 200, 10
-        track = pygame.Rect(x, y - track_h // 2, track_w, track_h)
+        """在设置行右侧绘制音量滑条：轨道 + 已填充部分 + 百分比文字。
+
+        轨道矩形由 _volume_track_for_row 统一计算，与鼠标拖动时的
+        坐标换算（volume_percent_at）共用同一套几何，保证"看到哪就能拖到哪"。
+        """
+        track = self._volume_track_for_row(row_rect)
+        x, y = track.left, track.centery
+        track_w = track.width
         # 轨道（未选中时更暗）
         pygame.draw.rect(
             self.screen.surface,
             Palette.PANEL_BG if not active else Palette.BUTTON_BG,
             track,
-            border_radius=track_h // 2,
+            border_radius=track.height // 2,
         )
-        pygame.draw.rect(self.screen.surface, Palette.PANEL_BORDER, track, 1, border_radius=track_h // 2)
+        pygame.draw.rect(
+            self.screen.surface, Palette.PANEL_BORDER, track, 1, border_radius=track.height // 2
+        )
         # 已填充部分
         fill_w = int(track_w * volume / 100)
         if fill_w > 0:
-            fill = pygame.Rect(x, y - track_h // 2, fill_w, track_h)
-            pygame.draw.rect(self.screen.surface, Palette.SUCCESS, fill, border_radius=track_h // 2)
+            fill = pygame.Rect(x, track.top, fill_w, track.height)
+            pygame.draw.rect(self.screen.surface, Palette.SUCCESS, fill, border_radius=track.height // 2)
         # 滑块
         knob_x = x + fill_w
         pygame.draw.circle(self.screen.surface, Palette.TEXT_PRIMARY, (knob_x, y), 9)

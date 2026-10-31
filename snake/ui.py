@@ -2,7 +2,7 @@
 """界面模块。
 
 负责一切与渲染、输入界面相关的工作：
-- Screen 封装窗口与网格绘制
+- Screen 封装窗口、离屏后缓冲（双缓冲）与网格绘制
 - HUD 顶部信息栏
 - Button / Panel 可复用控件
 - MenuRenderer 主菜单 / 暂停 / 结束画面
@@ -51,18 +51,70 @@ class FontBank:
 
 
 class Screen:
-    """主窗口与网格背景的封装。"""
+    """主窗口、离屏后缓冲与网格背景的封装。
+
+    双缓冲策略：
+    - ``surface`` 是离屏后缓冲，菜单、面板、蛇、食物等一切绘制都写在这里；
+    - 一帧画完后由 ``present()`` 把后缓冲提交到真正的窗口 ``display``。
+
+    这样显示器上永远不会出现"画了一半"的中间状态（撕裂 / 闪烁），
+    同时把绘制与提交解耦，为后面的按脏区提交留好接口。
+    本模块其余代码照旧写 ``screen.surface``，不需要关心缓冲细节。
+    """
 
     def __init__(self, config: Config) -> None:
-        """按配置创建窗口并预计算网格线。"""
+        """按配置创建窗口与后缓冲，并预计算网格线。"""
         self.config = config
         flags = pygame.FULLSCREEN if config.fullscreen else 0
-        self.surface = pygame.display.set_mode(
-            (config.window_width, config.window_height), flags
+        # DOUBLEBUF：要求 SDL 用双缓冲的显示模式；即使驱动忽略该标志，
+        # 下面的离屏后缓冲也能保证同样的"先画完再提交"效果。
+        self.display = pygame.display.set_mode(
+            (config.window_width, config.window_height), flags | pygame.DOUBLEBUF
         )
+        # 后缓冲：与窗口同尺寸的独立 Surface，所有绘制都发生在这里
+        self.surface = pygame.Surface(
+            (config.window_width, config.window_height)
+        ).convert()
         pygame.display.set_caption("贪吃蛇 Pygame 版")
         self.fonts = FontBank()
         self._grid_surface = self._build_grid_surface()
+
+    @property
+    def rect(self) -> pygame.Rect:
+        """整屏矩形（窗口尺寸）。"""
+        return pygame.Rect(0, 0, self.config.window_width, self.config.window_height)
+
+    def present(self, rects: Optional[Sequence[pygame.Rect]] = None) -> None:
+        """把后缓冲提交到窗口，完成一次双缓冲交换。
+
+        Args:
+            rects: None 表示整屏提交（菜单、结束画面等整屏重绘的场合）；
+                传入矩形列表时只把这些区域从后缓冲拷到窗口并局部刷新，
+                配合 display.update 实现"只重绘变化区域"。
+        """
+        if rects is None:
+            self.display.blit(self.surface, (0, 0))
+            pygame.display.flip()
+            return
+        clipped: List[pygame.Rect] = []
+        for rect in rects:
+            area = pygame.Rect(rect).clip(self.rect)
+            if area.width <= 0 or area.height <= 0:
+                continue  # 完全在窗口外的矩形直接丢弃
+            self.display.blit(self.surface, area.topleft, area)
+            clipped.append(area)
+        if clipped:
+            pygame.display.update(clipped)
+
+    def flip(self) -> None:
+        """整屏提交并交换缓冲区（python 语义延续，等价于 present(None)）。"""
+        self.present()
+
+    def restore_background(self, rect: pygame.Rect) -> None:
+        """按矩形把网格背景贴回后缓冲（增量渲染时擦掉上一帧的旧内容）。"""
+        area = pygame.Rect(rect).clip(self.rect)
+        if area.width > 0 and area.height > 0:
+            self.surface.blit(self._grid_surface, area.topleft, area)
 
     def _build_grid_surface(self, background=None, grid_line=None) -> pygame.Surface:
         """预绘制网格线到离屏 Surface，每帧直接贴图以提高性能。
